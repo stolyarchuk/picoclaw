@@ -103,6 +103,16 @@ func NewBaseChannel(
 	allowList []string,
 	opts ...BaseChannelOption,
 ) *BaseChannel {
+	isEmpty := true
+	for _, s := range allowList {
+		if s != "" {
+			isEmpty = false
+			break
+		}
+	}
+	if isEmpty {
+		allowList = []string{}
+	}
 	bc := &BaseChannel{
 		config:    config,
 		bus:       bus,
@@ -175,6 +185,12 @@ func (c *BaseChannel) ShouldRespondInGroup(isMentioned bool, content string) (bo
 
 func (c *BaseChannel) Name() string {
 	return c.name
+}
+
+// SetName updates the channel name. Used by the manager after channel creation
+// to ensure the name matches the config key (which may differ from the type).
+func (c *BaseChannel) SetName(name string) {
+	c.name = name
 }
 
 func (c *BaseChannel) ReasoningChannelID() string {
