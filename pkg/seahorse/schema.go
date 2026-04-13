@@ -123,10 +123,10 @@ func runSchema(db *sql.DB) error {
 			INSERT INTO summaries_fts (summary_id, content) VALUES (new.summary_id, new.content);
 		END`,
 		`CREATE TRIGGER IF NOT EXISTS summaries_ad AFTER DELETE ON summaries BEGIN
-			INSERT INTO summaries_fts (summaries_fts, summary_id, content) VALUES ('delete', old.summary_id, old.content);
+			DELETE FROM summaries_fts WHERE summary_id = old.summary_id;
 		END`,
 		`CREATE TRIGGER IF NOT EXISTS summaries_au AFTER UPDATE ON summaries BEGIN
-			INSERT INTO summaries_fts (summaries_fts, summary_id, content) VALUES ('delete', old.summary_id, old.content);
+			DELETE FROM summaries_fts WHERE summary_id = old.summary_id;
 			INSERT INTO summaries_fts (summary_id, content) VALUES (new.summary_id, new.content);
 		END`,
 

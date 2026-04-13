@@ -3368,7 +3368,7 @@ func (al *AgentLoop) handleCommand(
 		return "", false
 	}
 
-	rt := al.buildCommandsRuntime(agent, opts)
+	rt := al.buildCommandsRuntime(ctx, agent, opts)
 	executor := commands.NewExecutor(al.cmdRegistry, rt)
 
 	var commandReply string
@@ -3488,7 +3488,11 @@ func (al *AgentLoop) applyExplicitSkillCommand(
 	return true, false, ""
 }
 
-func (al *AgentLoop) buildCommandsRuntime(agent *AgentInstance, opts *processOptions) *commands.Runtime {
+func (al *AgentLoop) buildCommandsRuntime(
+	ctx context.Context,
+	agent *AgentInstance,
+	opts *processOptions,
+) *commands.Runtime {
 	registry := al.GetRegistry()
 	cfg := al.GetConfig()
 	rt := &commands.Runtime{
@@ -3570,14 +3574,7 @@ func (al *AgentLoop) buildCommandsRuntime(agent *AgentInstance, opts *processOpt
 			if opts == nil {
 				return fmt.Errorf("process options not available")
 			}
-			if agent.Sessions == nil {
-				return fmt.Errorf("sessions not initialized for agent")
-			}
-
-			agent.Sessions.SetHistory(opts.SessionKey, make([]providers.Message, 0))
-			agent.Sessions.SetSummary(opts.SessionKey, "")
-			agent.Sessions.Save(opts.SessionKey)
-			return nil
+			return al.contextManager.Clear(ctx, opts.SessionKey)
 		}
 	}
 	return rt
