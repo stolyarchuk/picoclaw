@@ -23,7 +23,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -47,11 +46,7 @@ const (
 var (
 	appVersion = config.Version
 
-	launcherIPFamiliesOnce sync.Once
-	launcherHasIPv4        bool
-	launcherHasIPv6        bool
-
-	server     *http.Server
+	servers    []*http.Server
 	serverAddr string
 	// browserLaunchURL is opened by openBrowser() (auto-open + tray "open console").
 	// Includes ?token= for same-machine dashboard login; keep serverAddr without secrets for other use.
@@ -60,6 +55,50 @@ var (
 
 	noBrowser *bool
 )
+
+type launcherBindMode string
+
+type launcherRuntimeBinding struct {
+	mode launcherBindMode
+	host string
+}
+
+const (
+	launcherBindModeAutoPrivate           launcherBindMode = "auto-private"
+	launcherBindModeAutoPublic            launcherBindMode = "auto-public"
+	launcherBindModeExplicitLiteral       launcherBindMode = "explicit-literal"
+	launcherBindModeExplicitAdaptiveAny   launcherBindMode = "explicit-adaptive-any"
+	launcherBindModeExplicitAdaptiveLocal launcherBindMode = "explicit-adaptive-localhost"
+)
+
+func parseLauncherHostList(raw string) ([]string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, errors.New("host cannot be empty")
+	}
+
+	parts := strings.Split(raw, ",")
+	hosts := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+	for _, part := range parts {
+		host := strings.TrimSpace(part)
+		if host == "" {
+			return nil, errors.New("host list contains an empty entry")
+		}
+		key := strings.ToLower(host)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		hosts = append(hosts, host)
+	}
+
+	if len(hosts) == 0 {
+		return nil, errors.New("host cannot be empty")
+	}
+
+	return hosts, nil
+}
 
 func shouldEnableLauncherFileLogging(enableConsole, debug bool) bool {
 	return !enableConsole || debug
@@ -72,86 +111,12 @@ func dashboardTokenConfigHelpPath(source launcherconfig.DashboardTokenSource, la
 	return launcherPath
 }
 
-func detectLauncherIPFamilies() (bool, bool) {
-	launcherIPFamiliesOnce.Do(func() {
-		if ips, err := net.LookupIP("localhost"); err == nil {
-			for _, ip := range ips {
-				if ip == nil {
-					continue
-				}
-				if ip.To4() != nil {
-					launcherHasIPv4 = true
-					continue
-				}
-				launcherHasIPv6 = true
-			}
-		}
-
-		if launcherHasIPv4 && launcherHasIPv6 {
-			return
-		}
-
-		if addrs, err := net.InterfaceAddrs(); err == nil {
-			for _, addr := range addrs {
-				ipnet, ok := addr.(*net.IPNet)
-				if !ok || ipnet.IP == nil {
-					continue
-				}
-				if ipnet.IP.To4() != nil {
-					launcherHasIPv4 = true
-					continue
-				}
-				launcherHasIPv6 = true
-			}
-		}
-	})
-
-	return launcherHasIPv4, launcherHasIPv6
-}
-
-func selectAdaptiveLauncherLoopbackHost(hasIPv4, hasIPv6 bool) string {
-	switch {
-	case hasIPv4 && hasIPv6:
-		return "localhost"
-	case hasIPv6:
-		return "::1"
-	case hasIPv4:
-		return "127.0.0.1"
-	default:
-		return "localhost"
-	}
-}
-
-func selectAdaptiveLauncherAnyHost(hasIPv4, hasIPv6 bool) string {
-	switch {
-	case hasIPv4 && hasIPv6:
-		return "::"
-	case hasIPv6:
-		return "::"
-	case hasIPv4:
-		return "0.0.0.0"
-	default:
-		return "::"
-	}
-}
-
-func resolveDefaultLauncherLoopbackHost() string {
-	hasIPv4, hasIPv6 := detectLauncherIPFamilies()
-	return selectAdaptiveLauncherLoopbackHost(hasIPv4, hasIPv6)
-}
-
 func resolveDefaultLauncherAnyHost() string {
-	hasIPv4, hasIPv6 := detectLauncherIPFamilies()
-	return selectAdaptiveLauncherAnyHost(hasIPv4, hasIPv6)
+	return utils.ResolveAdaptiveAnyHost()
 }
 
 func resolveDefaultLauncherPrivateHost() string {
-	hasIPv4, hasIPv6 := detectLauncherIPFamilies()
-	if hasIPv4 && hasIPv6 {
-		// In dual-stack environments, use wildcard IPv6 bind so localhost can serve both families.
-		return selectAdaptiveLauncherAnyHost(hasIPv4, hasIPv6)
-	}
-	return selectAdaptiveLauncherLoopbackHost(hasIPv4, hasIPv6)
+	return utils.ResolveAdaptiveLoopbackHost()
 }
 
 func normalizeLauncherSpecialHost(host string) string {
@@ -159,14 +124,34 @@ func normalizeLauncherSpecialHost(host string) string {
 	if host == "" {
 		return host
 	}
-	if strings.EqualFold(host, "localhost") {
-		return resolveDefaultLauncherLoopbackHost()
-	}
-	trimmed := strings.Trim(host, "[]")
-	if ip := net.ParseIP(trimmed); ip != nil && ip.IsUnspecified() {
+	if host == "*" {
 		return resolveDefaultLauncherAnyHost()
 	}
+	if strings.EqualFold(host, "localhost") {
+		return resolveDefaultLauncherPrivateHost()
+	}
+	if ip := net.ParseIP(strings.Trim(host, "[]")); ip != nil {
+		return ip.String()
+	}
 	return host
+}
+
+func resolveLauncherBindMode(rawHost string, hostExplicit bool, effectivePublic bool) launcherBindMode {
+	if !hostExplicit {
+		if effectivePublic {
+			return launcherBindModeAutoPublic
+		}
+		return launcherBindModeAutoPrivate
+	}
+
+	rawHost = strings.TrimSpace(rawHost)
+	if rawHost == "*" {
+		return launcherBindModeExplicitAdaptiveAny
+	}
+	if strings.EqualFold(rawHost, "localhost") {
+		return launcherBindModeExplicitAdaptiveLocal
+	}
+	return launcherBindModeExplicitLiteral
 }
 
 func resolveLauncherBindHost(
@@ -243,28 +228,124 @@ func appendUniqueHost(hosts []string, seen map[string]struct{}, host string) []s
 	return append(hosts, host)
 }
 
-func launcherConsoleHosts(bindHost string, hostExplicit bool, effectivePublic bool) []string {
+func launcherConsoleHosts(bindMode launcherBindMode, bindHost string, effectivePublic bool) []string {
 	hosts := make([]string, 0, 6)
 	seen := make(map[string]struct{}, 6)
 
 	hosts = appendUniqueHost(hosts, seen, "localhost")
 
-	if isWildcardBindHost(bindHost) {
+	switch bindMode {
+	case launcherBindModeAutoPrivate, launcherBindModeExplicitAdaptiveLocal:
 		hosts = appendUniqueHost(hosts, seen, "::1")
 		hosts = appendUniqueHost(hosts, seen, "127.0.0.1")
-
-		if effectivePublic || hostExplicit {
-			hosts = appendUniqueHost(hosts, seen, utils.GetLocalIPv6())
-			hosts = appendUniqueHost(hosts, seen, utils.GetLocalIPv4())
+		return hosts
+	case launcherBindModeAutoPublic, launcherBindModeExplicitAdaptiveAny:
+		hosts = appendUniqueHost(hosts, seen, "::1")
+		hosts = appendUniqueHost(hosts, seen, "127.0.0.1")
+		hosts = appendUniqueHost(hosts, seen, utils.GetLocalIPv6())
+		hosts = appendUniqueHost(hosts, seen, utils.GetLocalIPv4())
+		return hosts
+	case launcherBindModeExplicitLiteral:
+		trimmed := strings.Trim(strings.TrimSpace(bindHost), "[]")
+		if ip := net.ParseIP(trimmed); ip != nil {
+			if ip.IsUnspecified() {
+				if ip.To4() != nil {
+					hosts = appendUniqueHost(hosts, seen, "127.0.0.1")
+					hosts = appendUniqueHost(hosts, seen, utils.GetLocalIPv4())
+					return hosts
+				}
+				hosts = appendUniqueHost(hosts, seen, "::1")
+				hosts = appendUniqueHost(hosts, seen, utils.GetLocalIPv6())
+				return hosts
+			}
+			hosts = appendUniqueHost(hosts, seen, ip.String())
+			return hosts
 		}
+	}
+
+	if effectivePublic && isWildcardBindHost(bindHost) {
+		hosts = appendUniqueHost(hosts, seen, "::1")
+		hosts = appendUniqueHost(hosts, seen, "127.0.0.1")
+		hosts = appendUniqueHost(hosts, seen, utils.GetLocalIPv6())
+		hosts = appendUniqueHost(hosts, seen, utils.GetLocalIPv4())
 		return hosts
 	}
 
-	if hostExplicit {
-		hosts = appendUniqueHost(hosts, seen, bindHost)
-	}
+	hosts = appendUniqueHost(hosts, seen, bindHost)
 
 	return hosts
+}
+
+func openLauncherListener(network, host, port string) (net.Listener, error) {
+	return net.Listen(network, net.JoinHostPort(host, port))
+}
+
+func openLauncherPrivateListeners(port string) ([]net.Listener, string, error) {
+	if ln6, err6 := openLauncherListener("tcp6", "::1", port); err6 == nil {
+		if ln4, err4 := openLauncherListener("tcp4", "127.0.0.1", port); err4 == nil {
+			return []net.Listener{ln6, ln4}, "localhost", nil
+		}
+		_ = ln6.Close()
+	}
+
+	if ln6, err := openLauncherListener("tcp6", "::1", port); err == nil {
+		return []net.Listener{ln6}, "::1", nil
+	}
+
+	if ln4, err := openLauncherListener("tcp4", "127.0.0.1", port); err == nil {
+		return []net.Listener{ln4}, "127.0.0.1", nil
+	}
+
+	return nil, "", fmt.Errorf("failed to open private localhost listener on port %s", port)
+}
+
+func openLauncherAnyListener(port string) ([]net.Listener, string, error) {
+	// For auto-public and -host=* we intentionally bind :: on "tcp" first.
+	// Go's compatibility layer will provide dual-stack behavior on environments where it is supported.
+	if ln, err := openLauncherListener("tcp", "::", port); err == nil {
+		return []net.Listener{ln}, "::", nil
+	}
+
+	if ln4, err := openLauncherListener("tcp4", "0.0.0.0", port); err == nil {
+		return []net.Listener{ln4}, "0.0.0.0", nil
+	}
+
+	return nil, "", fmt.Errorf("failed to open adaptive any-host listener on port %s", port)
+}
+
+func openLauncherLiteralListener(host, port string) ([]net.Listener, string, error) {
+	host = strings.TrimSpace(host)
+	trimmed := strings.Trim(host, "[]")
+	network := "tcp"
+
+	if ip := net.ParseIP(trimmed); ip != nil {
+		host = ip.String()
+		if ip.To4() != nil {
+			network = "tcp4"
+		} else {
+			network = "tcp6"
+		}
+	}
+
+	ln, err := openLauncherListener(network, host, port)
+	if err != nil {
+		return nil, "", err
+	}
+
+	return []net.Listener{ln}, host, nil
+}
+
+func openLauncherListeners(mode launcherBindMode, bindHost, port string) ([]net.Listener, string, error) {
+	switch mode {
+	case launcherBindModeAutoPrivate, launcherBindModeExplicitAdaptiveLocal:
+		return openLauncherPrivateListeners(port)
+	case launcherBindModeAutoPublic, launcherBindModeExplicitAdaptiveAny:
+		return openLauncherAnyListener(port)
+	case launcherBindModeExplicitLiteral:
+		return openLauncherLiteralListener(bindHost, port)
+	default:
+		return nil, "", fmt.Errorf("unsupported launcher bind mode: %s", mode)
+	}
 }
 
 // maskSecret masks a secret for display. It always shows up to the first 3
@@ -421,20 +502,47 @@ func main() {
 	}
 	envHost := strings.TrimSpace(os.Getenv(launcherconfig.EnvLauncherHost))
 
-	effectiveHost, effectivePublic, hostExplicit, err := resolveLauncherBindHost(
-		*host,
-		explicitHost,
-		envHost,
-		effectivePublic,
-	)
-	if err != nil {
-		logger.Fatalf("Invalid host %q: %v", *host, err)
+	rawHostInput := strings.TrimSpace(*host)
+	if !explicitHost {
+		rawHostInput = envHost
 	}
 
-	effectiveAllowedCIDRs := append([]string(nil), launcherCfg.AllowedCIDRs...)
-	if len(effectiveAllowedCIDRs) == 0 && !effectivePublic && !hostExplicit && isWildcardBindHost(effectiveHost) {
-		effectiveAllowedCIDRs = []string{"127.0.0.1/32", "::1/128"}
-		logger.InfoC("web", "Applying loopback-only access policy for default dual-stack bind")
+	hostExplicit := false
+	effectiveHost := ""
+	bindMode := launcherBindModeAutoPrivate
+	bindTargets := make([]launcherRuntimeBinding, 0, 1)
+	if rawHostInput != "" {
+		hosts, parseErr := parseLauncherHostList(rawHostInput)
+		if parseErr != nil {
+			logger.Fatalf("Invalid host %q: %v", rawHostInput, parseErr)
+		}
+		hostExplicit = true
+		effectivePublic = false
+		for _, raw := range hosts {
+			resolvedHost, _, _, resolveErr := resolveLauncherBindHost(raw, true, "", false)
+			if resolveErr != nil {
+				logger.Fatalf("Invalid host %q: %v", raw, resolveErr)
+			}
+			mode := resolveLauncherBindMode(raw, true, false)
+			bindTargets = append(bindTargets, launcherRuntimeBinding{mode: mode, host: resolvedHost})
+		}
+		effectiveHost = bindTargets[0].host
+		bindMode = bindTargets[0].mode
+	} else {
+		resolvedHost, resolvedPublic, resolvedExplicit, resolveErr := resolveLauncherBindHost(
+			"",
+			false,
+			"",
+			effectivePublic,
+		)
+		if resolveErr != nil {
+			logger.Fatalf("Invalid default host: %v", resolveErr)
+		}
+		effectiveHost = resolvedHost
+		effectivePublic = resolvedPublic
+		hostExplicit = resolvedExplicit
+		bindMode = resolveLauncherBindMode("", false, effectivePublic)
+		bindTargets = append(bindTargets, launcherRuntimeBinding{mode: bindMode, host: effectiveHost})
 	}
 
 	if !explicitHost && envHost != "" {
@@ -452,6 +560,22 @@ func main() {
 		}
 		logger.Fatalf("Invalid port %q: %v", effectivePort, err)
 	}
+
+	listeners := make([]net.Listener, 0, len(bindTargets))
+	runtimeBindings := make([]launcherRuntimeBinding, 0, len(bindTargets))
+	for _, target := range bindTargets {
+		targetListeners, runtimeHost, listenErr := openLauncherListeners(target.mode, target.host, effectivePort)
+		if listenErr != nil {
+			for _, ln := range listeners {
+				_ = ln.Close()
+			}
+			logger.Fatalf("Failed to open launcher listener(s): %v", listenErr)
+		}
+		listeners = append(listeners, targetListeners...)
+		runtimeBindings = append(runtimeBindings, launcherRuntimeBinding{mode: target.mode, host: runtimeHost})
+	}
+	effectiveHost = runtimeBindings[0].host
+	bindMode = runtimeBindings[0].mode
 
 	dashboardToken, dashboardSigningKey, dashboardTokenSource, dashErr := launcherconfig.EnsureDashboardSecrets(
 		launcherCfg,
@@ -480,9 +604,6 @@ func main() {
 		logger.ErrorC("web", fmt.Sprintf("Warning: could not open auth store: %v", authStoreErr))
 	}
 
-	// Determine listen address
-	addr := net.JoinHostPort(effectiveHost, effectivePort)
-
 	// Initialize Server components
 	mux := http.NewServeMux()
 
@@ -499,14 +620,18 @@ func main() {
 	if _, err = apiHandler.EnsurePicoChannel(""); err != nil {
 		logger.ErrorC("web", fmt.Sprintf("Warning: failed to ensure pico channel on startup: %v", err))
 	}
-	apiHandler.SetServerOptions(portNum, effectivePublic, explicitPublic, effectiveAllowedCIDRs)
-	apiHandler.SetServerBindHost(effectiveHost, hostExplicit)
+	gatewayHostExplicit := hostExplicit && len(runtimeBindings) == 1
+	if hostExplicit && len(runtimeBindings) > 1 {
+		logger.WarnC("web", "Multiple launcher hosts are configured; gateway host override is disabled for this run")
+	}
+	apiHandler.SetServerOptions(portNum, effectivePublic, explicitPublic, launcherCfg.AllowedCIDRs)
+	apiHandler.SetServerBindHost(effectiveHost, gatewayHostExplicit)
 	apiHandler.RegisterRoutes(mux)
 
 	// Frontend Embedded Assets
 	registerEmbedRoutes(mux)
 
-	accessControlledMux, err := middleware.IPAllowlist(effectiveAllowedCIDRs, mux)
+	accessControlledMux, err := middleware.IPAllowlist(launcherCfg.AllowedCIDRs, mux)
 	if err != nil {
 		logger.Fatalf("Invalid allowed CIDR configuration: %v", err)
 	}
@@ -527,11 +652,19 @@ func main() {
 
 	// Print startup banner and token (console mode only).
 	if enableConsole || debug {
+		consoleHosts := make([]string, 0, 8)
+		consoleSeen := make(map[string]struct{}, 8)
+		for _, binding := range runtimeBindings {
+			for _, host := range launcherConsoleHosts(binding.mode, binding.host, effectivePublic) {
+				consoleHosts = appendUniqueHost(consoleHosts, consoleSeen, host)
+			}
+		}
+
 		fmt.Print(utils.Banner)
 		fmt.Println()
 		fmt.Println("  Open the following URL in your browser:")
 		fmt.Println()
-		for _, host := range launcherConsoleHosts(effectiveHost, hostExplicit, effectivePublic) {
+		for _, host := range consoleHosts {
 			fmt.Printf("    >> http://%s <<\n", net.JoinHostPort(host, effectivePort))
 		}
 		fmt.Println()
@@ -558,7 +691,9 @@ func main() {
 	}
 
 	// Log startup info to file
-	logger.InfoC("web", fmt.Sprintf("Server will listen on http://%s", net.JoinHostPort(effectiveHost, effectivePort)))
+	for _, ln := range listeners {
+		logger.InfoC("web", fmt.Sprintf("Server will listen on http://%s", ln.Addr().String()))
+	}
 	if isWildcardBindHost(effectiveHost) {
 		if ip := advertiseIPForWildcardBindHost(effectiveHost); ip != "" {
 			logger.InfoC("web", fmt.Sprintf("Public access enabled at http://%s", net.JoinHostPort(ip, effectivePort)))
@@ -581,14 +716,19 @@ func main() {
 		apiHandler.TryAutoStartGateway()
 	}()
 
-	// Start the Server in a goroutine
-	server = &http.Server{Addr: addr, Handler: handler}
-	go func() {
-		logger.InfoC("web", fmt.Sprintf("Server listening on %s", addr))
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Fatalf("Server failed to start: %v", err)
-		}
-	}()
+	// Start the server(s) in goroutines.
+	servers = make([]*http.Server, 0, len(listeners))
+	for _, ln := range listeners {
+		srv := &http.Server{Handler: handler}
+		servers = append(servers, srv)
+
+		go func(s *http.Server, l net.Listener) {
+			logger.InfoC("web", fmt.Sprintf("Server listening on %s", l.Addr().String()))
+			if serveErr := s.Serve(l); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+				logger.Fatalf("Server failed to start on %s: %v", l.Addr().String(), serveErr)
+			}
+		}(srv, ln)
+	}
 
 	defer shutdownApp()
 

@@ -7,19 +7,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/web/backend/launcherconfig"
 )
-
-func resetAdaptiveIPFamiliesForTest() {
-	adaptiveIPFamiliesOnce = sync.Once{}
-	adaptiveHasIPv4 = false
-	adaptiveHasIPv6 = false
-}
 
 func TestGatewayHostOverrideUsesExplicitRuntimePublic(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "config.json")
@@ -115,34 +108,6 @@ func TestSelectAdaptiveAnyHost(t *testing.T) {
 	}
 }
 
-func TestAdaptiveHostSelectionFallsBackToInterfaceAddrs(t *testing.T) {
-	oldLookup := lookupLocalhostIPs
-	oldList := listInterfaceAddrs
-	lookupLocalhostIPs = func() ([]net.IP, error) {
-		return nil, errors.New("lookup failed")
-	}
-	_, v4Net, err := net.ParseCIDR("192.0.2.10/24")
-	if err != nil {
-		t.Fatalf("ParseCIDR() error = %v", err)
-	}
-	listInterfaceAddrs = func() ([]net.Addr, error) {
-		return []net.Addr{v4Net}, nil
-	}
-	resetAdaptiveIPFamiliesForTest()
-	t.Cleanup(func() {
-		lookupLocalhostIPs = oldLookup
-		listInterfaceAddrs = oldList
-		resetAdaptiveIPFamiliesForTest()
-	})
-
-	if got := resolveDefaultAnyHost(); got != "0.0.0.0" {
-		t.Fatalf("resolveDefaultAnyHost() = %q, want %q", got, "0.0.0.0")
-	}
-	if got := resolveDefaultLoopbackHost(); got != "127.0.0.1" {
-		t.Fatalf("resolveDefaultLoopbackHost() = %q, want %q", got, "127.0.0.1")
-	}
-}
-
 func TestGatewayProbeHostUsesLoopbackForWildcardBind(t *testing.T) {
 	want := resolveDefaultLoopbackHost()
 	if got := gatewayProbeHost("0.0.0.0"); got != want {
@@ -158,7 +123,7 @@ func TestGatewayProbeHostUsesPreferredLoopbackForEmptyBind(t *testing.T) {
 }
 
 func TestGatewayProbeHostUsesPreferredLoopbackForLocalhostBind(t *testing.T) {
-	want := resolveLocalhostLoopbackHost()
+	want := resolveDefaultLoopbackHost()
 	if got := gatewayProbeHost("localhost"); got != want {
 		t.Fatalf("gatewayProbeHost(localhost) = %q, want %q", got, want)
 	}

@@ -96,6 +96,41 @@ func TestMaskSecret(t *testing.T) {
 	}
 }
 
+func TestParseLauncherHostList(t *testing.T) {
+	tests := []struct {
+		name    string
+		raw     string
+		want    []string
+		wantErr bool
+	}{
+		{name: "single host", raw: "127.0.0.1", want: []string{"127.0.0.1"}},
+		{name: "multiple hosts", raw: "127.0.0.1, 192.168.2.5", want: []string{"127.0.0.1", "192.168.2.5"}},
+		{name: "dedupe hosts", raw: "127.0.0.1,127.0.0.1", want: []string{"127.0.0.1"}},
+		{name: "reject empty entry", raw: "127.0.0.1,  ", wantErr: true},
+		{name: "reject empty input", raw: "   ", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseLauncherHostList(tt.raw)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("parseLauncherHostList() err = %v, wantErr %t", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				return
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("len(got) = %d, want %d (%#v)", len(got), len(tt.want), got)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Fatalf("got[%d] = %q, want %q", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
 func TestResolveLauncherBindHost(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -113,7 +148,7 @@ func TestResolveLauncherBindHost(t *testing.T) {
 			host:         "0.0.0.0",
 			explicitHost: true,
 			effectivePub: true,
-			wantHost:     resolveDefaultLauncherAnyHost(),
+			wantHost:     "0.0.0.0",
 			wantPublic:   false,
 			wantExplicit: true,
 		},
@@ -139,6 +174,24 @@ func TestResolveLauncherBindHost(t *testing.T) {
 			envHost:      "0.0.0.0",
 			explicitHost: false,
 			effectivePub: true,
+			wantHost:     "0.0.0.0",
+			wantPublic:   false,
+			wantExplicit: true,
+		},
+		{
+			name:         "explicit localhost uses adaptive private host",
+			host:         "localhost",
+			explicitHost: true,
+			effectivePub: false,
+			wantHost:     resolveDefaultLauncherPrivateHost(),
+			wantPublic:   false,
+			wantExplicit: true,
+		},
+		{
+			name:         "explicit star uses adaptive any host",
+			host:         "*",
+			explicitHost: true,
+			effectivePub: false,
 			wantHost:     resolveDefaultLauncherAnyHost(),
 			wantPublic:   false,
 			wantExplicit: true,
@@ -190,9 +243,33 @@ func TestResolveLauncherBindHost(t *testing.T) {
 	}
 }
 
+func TestResolveLauncherBindMode(t *testing.T) {
+	tests := []struct {
+		name         string
+		rawHost      string
+		hostExplicit bool
+		effectivePub bool
+		wantMode     launcherBindMode
+	}{
+		{name: "auto private", rawHost: "", hostExplicit: false, effectivePub: false, wantMode: launcherBindModeAutoPrivate},
+		{name: "auto public", rawHost: "", hostExplicit: false, effectivePub: true, wantMode: launcherBindModeAutoPublic},
+		{name: "explicit localhost", rawHost: "localhost", hostExplicit: true, effectivePub: false, wantMode: launcherBindModeExplicitAdaptiveLocal},
+		{name: "explicit star", rawHost: "*", hostExplicit: true, effectivePub: false, wantMode: launcherBindModeExplicitAdaptiveAny},
+		{name: "explicit literal", rawHost: "0.0.0.0", hostExplicit: true, effectivePub: false, wantMode: launcherBindModeExplicitLiteral},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := resolveLauncherBindMode(tt.rawHost, tt.hostExplicit, tt.effectivePub); got != tt.wantMode {
+				t.Fatalf("resolveLauncherBindMode() = %q, want %q", got, tt.wantMode)
+			}
+		})
+	}
+}
+
 func TestLauncherConsoleHosts(t *testing.T) {
-	t.Run("explicit wildcard dedupes localhost and includes loopback ipv6", func(t *testing.T) {
-		hosts := launcherConsoleHosts("0.0.0.0", true, false)
+	t.Run("auto private includes dual loopback hints", func(t *testing.T) {
+		hosts := launcherConsoleHosts(launcherBindModeAutoPrivate, "localhost", false)
 		seen := make(map[string]bool, len(hosts))
 		for _, host := range hosts {
 			if seen[host] {
@@ -211,8 +288,22 @@ func TestLauncherConsoleHosts(t *testing.T) {
 		}
 	})
 
+	t.Run("explicit ipv4 wildcard excludes ipv6 loopback", func(t *testing.T) {
+		hosts := launcherConsoleHosts(launcherBindModeExplicitLiteral, "0.0.0.0", false)
+		seen := make(map[string]bool, len(hosts))
+		for _, host := range hosts {
+			seen[host] = true
+		}
+		if seen["::1"] {
+			t.Fatalf("did not expect ::1 in %#v", hosts)
+		}
+		if !seen["127.0.0.1"] {
+			t.Fatalf("expected 127.0.0.1 in %#v", hosts)
+		}
+	})
+
 	t.Run("explicit ipv6 host remains visible", func(t *testing.T) {
-		hosts := launcherConsoleHosts("::1", true, false)
+		hosts := launcherConsoleHosts(launcherBindModeExplicitLiteral, "::1", false)
 		if len(hosts) != 2 {
 			t.Fatalf("len(hosts) = %d, want 2 (%#v)", len(hosts), hosts)
 		}

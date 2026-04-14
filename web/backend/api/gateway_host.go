@@ -6,43 +6,17 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"sync"
 
 	"github.com/sipeed/picoclaw/pkg/config"
-)
-
-var (
-	adaptiveIPFamiliesOnce sync.Once
-	adaptiveHasIPv4        bool
-	adaptiveHasIPv6        bool
-	lookupLocalhostIPs     = func() ([]net.IP, error) { return net.LookupIP("localhost") }
-	listInterfaceAddrs     = net.InterfaceAddrs
+	"github.com/sipeed/picoclaw/web/backend/utils"
 )
 
 func selectAdaptiveLoopbackHost(hasIPv4, hasIPv6 bool) string {
-	switch {
-	case hasIPv4 && hasIPv6:
-		return "localhost"
-	case hasIPv6:
-		return "::1"
-	case hasIPv4:
-		return "127.0.0.1"
-	default:
-		return "localhost"
-	}
+	return utils.SelectAdaptiveLoopbackHost(hasIPv4, hasIPv6)
 }
 
 func selectAdaptiveAnyHost(hasIPv4, hasIPv6 bool) string {
-	switch {
-	case hasIPv4 && hasIPv6:
-		return "::"
-	case hasIPv6:
-		return "::"
-	case hasIPv4:
-		return "0.0.0.0"
-	default:
-		return "::"
-	}
+	return utils.SelectAdaptiveAnyHost(hasIPv4, hasIPv6)
 }
 
 func isLoopbackEquivalentHost(host string) bool {
@@ -58,63 +32,12 @@ func isLoopbackEquivalentHost(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-func detectAdaptiveIPFamilies() (bool, bool) {
-	adaptiveIPFamiliesOnce.Do(func() {
-		if ips, err := lookupLocalhostIPs(); err == nil {
-			for _, ip := range ips {
-				if ip == nil {
-					continue
-				}
-				if ip.To4() != nil {
-					adaptiveHasIPv4 = true
-					continue
-				}
-				adaptiveHasIPv6 = true
-			}
-		}
-
-		if adaptiveHasIPv4 && adaptiveHasIPv6 {
-			return
-		}
-
-		if addrs, err := listInterfaceAddrs(); err == nil {
-			for _, addr := range addrs {
-				ipnet, ok := addr.(*net.IPNet)
-				if !ok || ipnet.IP == nil {
-					continue
-				}
-				if ipnet.IP.To4() != nil {
-					adaptiveHasIPv4 = true
-					continue
-				}
-				adaptiveHasIPv6 = true
-			}
-		}
-	})
-
-	return adaptiveHasIPv4, adaptiveHasIPv6
-}
-
-func resolveAdaptiveLoopbackHost() string {
-	hasIPv4, hasIPv6 := detectAdaptiveIPFamilies()
-	return selectAdaptiveLoopbackHost(hasIPv4, hasIPv6)
-}
-
-func resolveAdaptiveAnyHost() string {
-	hasIPv4, hasIPv6 := detectAdaptiveIPFamilies()
-	return selectAdaptiveAnyHost(hasIPv4, hasIPv6)
-}
-
 func resolveDefaultLoopbackHost() string {
-	return resolveAdaptiveLoopbackHost()
+	return utils.ResolveAdaptiveLoopbackHost()
 }
 
 func resolveDefaultAnyHost() string {
-	return resolveAdaptiveAnyHost()
-}
-
-func resolveLocalhostLoopbackHost() string {
-	return resolveAdaptiveLoopbackHost()
+	return utils.ResolveAdaptiveAnyHost()
 }
 
 func (h *Handler) effectiveLauncherPublic() bool {
@@ -141,7 +64,7 @@ func canonicalLauncherBindHost(host string) string {
 		return resolveDefaultLoopbackHost()
 	}
 	if strings.EqualFold(host, "localhost") {
-		return resolveLocalhostLoopbackHost()
+		return resolveDefaultLoopbackHost()
 	}
 	trimmed := strings.Trim(host, "[]")
 	if ip := net.ParseIP(trimmed); ip != nil && ip.IsUnspecified() {
@@ -207,7 +130,7 @@ func gatewayProbeHost(bindHost string) string {
 		return resolveDefaultLoopbackHost()
 	}
 	if strings.EqualFold(bindHost, "localhost") {
-		return resolveLocalhostLoopbackHost()
+		return resolveDefaultLoopbackHost()
 	}
 
 	trimmed := strings.Trim(bindHost, "[]")
