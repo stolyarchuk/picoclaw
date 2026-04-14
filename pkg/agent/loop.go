@@ -1056,8 +1056,23 @@ func (al *AgentLoop) ReloadProviderAndConfig(
 
 	al.mu.Unlock()
 
+	oldMCPManager := al.mcp.reset()
 	al.hookRuntime.reset(al)
 	configureHookManagerFromConfig(al.hooks, cfg)
+	if err := al.ensureHooksInitialized(ctx); err != nil {
+		logger.WarnCF("agent", "Configured hooks failed to reinitialize after reload",
+			map[string]any{"error": err.Error()})
+	}
+	if oldMCPManager != nil {
+		if err := oldMCPManager.Close(); err != nil {
+			logger.WarnCF("agent", "Failed to close previous MCP manager during reload",
+				map[string]any{"error": err.Error()})
+		}
+	}
+	if err := al.ensureMCPInitialized(ctx); err != nil {
+		logger.WarnCF("agent", "MCP failed to reinitialize after reload",
+			map[string]any{"error": err.Error()})
+	}
 
 	// Close old provider after releasing the lock
 	// This prevents blocking readers while closing
