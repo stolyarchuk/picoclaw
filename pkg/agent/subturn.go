@@ -10,6 +10,7 @@ import (
 
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
+	"github.com/sipeed/picoclaw/pkg/providers/messageutil"
 	"github.com/sipeed/picoclaw/pkg/tools"
 )
 
@@ -366,15 +367,17 @@ func spawnSubTurn(
 	}
 
 	// Create processOptions for the child turn
+	dispatch := DispatchRequest{
+		SessionKey:     childID,
+		UserMessage:    cfg.SystemPrompt,
+		Media:          nil,
+		InboundContext: cloneInboundContext(parentTS.opts.Dispatch.InboundContext),
+	}
 	opts := processOptions{
-		SessionKey:              childID,
-		Channel:                 parentTS.channel,
-		ChatID:                  parentTS.chatID,
-		SenderID:                parentTS.opts.SenderID,
+		Dispatch:                dispatch,
+		SenderID:                parentTS.opts.Dispatch.SenderID(),
 		SenderDisplayName:       parentTS.opts.SenderDisplayName,
-		UserMessage:             cfg.SystemPrompt, // Task description becomes the first user message
 		SystemPromptOverride:    cfg.ActualSystemPrompt,
-		Media:                   nil,
 		InitialSteeringMessages: cfg.InitialMessages,
 		DefaultResponse:         "",
 		EnableSummary:           false,
@@ -384,7 +387,11 @@ func spawnSubTurn(
 	}
 
 	// Create event scope for the child turn
-	scope := al.newTurnEventScope(agent.ID, childID)
+	scope := al.newTurnEventScope(
+		agent.ID,
+		childID,
+		newTurnContext(opts.Dispatch.InboundContext, opts.Dispatch.RouteResult, opts.Dispatch.SessionScope),
+	)
 
 	// Create child turnState using the new API
 	childTS := newTurnState(&agent, opts, scope)
@@ -471,7 +478,8 @@ func spawnSubTurn(
 	}()
 
 	// 8. Execute sub-turn via the real agent loop.
-	turnRes, turnErr := al.runTurn(childCtx, childTS)
+	pipeline := NewPipeline(al)
+	turnRes, turnErr := al.runTurn(childCtx, childTS, pipeline)
 
 	// Release the concurrency semaphore immediately after runTurn completes,
 	// before the cleanup defer runs. This prevents a deadlock where:
@@ -631,6 +639,10 @@ func (e *ephemeralSessionStore) AddMessage(_, role, content string) {
 }
 
 func (e *ephemeralSessionStore) AddFullMessage(_ string, msg providers.Message) {
+	if messageutil.IsTransientAssistantThoughtMessage(msg) {
+		return
+	}
+
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.history = append(e.history, msg)
@@ -660,6 +672,7 @@ func (e *ephemeralSessionStore) SetSummary(_, summary string) {
 func (e *ephemeralSessionStore) SetHistory(_ string, history []providers.Message) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	history = messageutil.FilterInvalidHistoryMessages(history)
 	e.history = make([]providers.Message, len(history))
 	copy(e.history, history)
 	e.truncateLocked()

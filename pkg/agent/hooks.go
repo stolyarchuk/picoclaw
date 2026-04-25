@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"reflect"
 	"sort"
 	"sync"
 	"time"
@@ -90,12 +91,11 @@ type ToolApprover interface {
 
 type LLMHookRequest struct {
 	Meta             EventMeta                  `json:"meta"`
+	Context          *TurnContext               `json:"context,omitempty"`
 	Model            string                     `json:"model"`
 	Messages         []providers.Message        `json:"messages,omitempty"`
 	Tools            []providers.ToolDefinition `json:"tools,omitempty"`
 	Options          map[string]any             `json:"options,omitempty"`
-	Channel          string                     `json:"channel,omitempty"`
-	ChatID           string                     `json:"chat_id,omitempty"`
 	GracefulTerminal bool                       `json:"graceful_terminal,omitempty"`
 }
 
@@ -104,6 +104,8 @@ func (r *LLMHookRequest) Clone() *LLMHookRequest {
 		return nil
 	}
 	cloned := *r
+	cloned.Meta = cloneEventMeta(r.Meta)
+	cloned.Context = cloneTurnContext(r.Context)
 	cloned.Messages = cloneProviderMessages(r.Messages)
 	cloned.Tools = cloneToolDefinitions(r.Tools)
 	cloned.Options = cloneStringAnyMap(r.Options)
@@ -112,10 +114,9 @@ func (r *LLMHookRequest) Clone() *LLMHookRequest {
 
 type LLMHookResponse struct {
 	Meta     EventMeta              `json:"meta"`
+	Context  *TurnContext           `json:"context,omitempty"`
 	Model    string                 `json:"model"`
 	Response *providers.LLMResponse `json:"response,omitempty"`
-	Channel  string                 `json:"channel,omitempty"`
-	ChatID   string                 `json:"chat_id,omitempty"`
 }
 
 func (r *LLMHookResponse) Clone() *LLMHookResponse {
@@ -123,12 +124,15 @@ func (r *LLMHookResponse) Clone() *LLMHookResponse {
 		return nil
 	}
 	cloned := *r
+	cloned.Meta = cloneEventMeta(r.Meta)
+	cloned.Context = cloneTurnContext(r.Context)
 	cloned.Response = cloneLLMResponse(r.Response)
 	return &cloned
 }
 
 type ToolCallHookRequest struct {
 	Meta       EventMeta         `json:"meta"`
+	Context    *TurnContext      `json:"context,omitempty"`
 	Tool       string            `json:"tool"`
 	Arguments  map[string]any    `json:"arguments,omitempty"`
 	Channel    string            `json:"channel,omitempty"`
@@ -141,6 +145,8 @@ func (r *ToolCallHookRequest) Clone() *ToolCallHookRequest {
 		return nil
 	}
 	cloned := *r
+	cloned.Meta = cloneEventMeta(r.Meta)
+	cloned.Context = cloneTurnContext(r.Context)
 	cloned.Arguments = cloneStringAnyMap(r.Arguments)
 	cloned.HookResult = cloneToolResult(r.HookResult)
 	return &cloned
@@ -148,10 +154,9 @@ func (r *ToolCallHookRequest) Clone() *ToolCallHookRequest {
 
 type ToolApprovalRequest struct {
 	Meta      EventMeta      `json:"meta"`
+	Context   *TurnContext   `json:"context,omitempty"`
 	Tool      string         `json:"tool"`
 	Arguments map[string]any `json:"arguments,omitempty"`
-	Channel   string         `json:"channel,omitempty"`
-	ChatID    string         `json:"chat_id,omitempty"`
 }
 
 func (r *ToolApprovalRequest) Clone() *ToolApprovalRequest {
@@ -159,18 +164,19 @@ func (r *ToolApprovalRequest) Clone() *ToolApprovalRequest {
 		return nil
 	}
 	cloned := *r
+	cloned.Meta = cloneEventMeta(r.Meta)
+	cloned.Context = cloneTurnContext(r.Context)
 	cloned.Arguments = cloneStringAnyMap(r.Arguments)
 	return &cloned
 }
 
 type ToolResultHookResponse struct {
 	Meta      EventMeta         `json:"meta"`
+	Context   *TurnContext      `json:"context,omitempty"`
 	Tool      string            `json:"tool"`
 	Arguments map[string]any    `json:"arguments,omitempty"`
 	Result    *tools.ToolResult `json:"result,omitempty"`
 	Duration  time.Duration     `json:"duration"`
-	Channel   string            `json:"channel,omitempty"`
-	ChatID    string            `json:"chat_id,omitempty"`
 }
 
 func (r *ToolResultHookResponse) Clone() *ToolResultHookResponse {
@@ -178,6 +184,8 @@ func (r *ToolResultHookResponse) Clone() *ToolResultHookResponse {
 		return nil
 	}
 	cloned := *r
+	cloned.Meta = cloneEventMeta(r.Meta)
+	cloned.Context = cloneTurnContext(r.Context)
 	cloned.Arguments = cloneStringAnyMap(r.Arguments)
 	cloned.Result = cloneToolResult(r.Result)
 	return &cloned
@@ -318,6 +326,7 @@ func (hm *HookManager) BeforeLLM(ctx context.Context, req *LLMHookRequest) (*LLM
 		switch decision.normalizedAction() {
 		case HookActionContinue, HookActionModify:
 			if next != nil {
+				next = hm.applyBeforeLLMControls(reg.Name, current, next)
 				current = next
 			}
 		case HookActionAbortTurn, HookActionHardAbort:
@@ -358,6 +367,84 @@ func (hm *HookManager) AfterLLM(ctx context.Context, resp *LLMHookResponse) (*LL
 		}
 	}
 	return current, HookDecision{Action: HookActionContinue}
+}
+
+func (hm *HookManager) applyBeforeLLMControls(
+	hookName string,
+	current *LLMHookRequest,
+	next *LLMHookRequest,
+) *LLMHookRequest {
+	if next == nil || current == nil {
+		return next
+	}
+	if !llmHookSystemMessagesUnchanged(current.Messages, next.Messages) {
+		logger.WarnCF("hooks", "Hook attempted to modify system prompt; preserving original messages", map[string]any{
+			"hook": hookName,
+		})
+		next.Messages = cloneProviderMessages(current.Messages)
+	}
+	if !llmHookToolDefinitionsUnchanged(current.Tools, next.Tools) {
+		logger.WarnCF("hooks", "Hook attempted to modify tool definitions; preserving original tools", map[string]any{
+			"hook": hookName,
+		})
+		next.Tools = cloneToolDefinitions(current.Tools)
+	}
+	return next
+}
+
+func llmHookSystemMessagesUnchanged(before, after []providers.Message) bool {
+	beforeSystem := systemMessageFingerprints(before)
+	afterSystem := systemMessageFingerprints(after)
+	return reflect.DeepEqual(beforeSystem, afterSystem)
+}
+
+type systemMessageFingerprint struct {
+	Index   int
+	Message providers.Message
+}
+
+func systemMessageFingerprints(messages []providers.Message) []systemMessageFingerprint {
+	var fingerprints []systemMessageFingerprint
+	for i, msg := range messages {
+		if msg.Role != "system" {
+			continue
+		}
+		msg = providerVisibleMessage(msg)
+		fingerprints = append(fingerprints, systemMessageFingerprint{
+			Index:   i,
+			Message: cloneProviderMessages([]providers.Message{msg})[0],
+		})
+	}
+	return fingerprints
+}
+
+func llmHookToolDefinitionsUnchanged(before, after []providers.ToolDefinition) bool {
+	return reflect.DeepEqual(providerVisibleToolDefinitions(before), providerVisibleToolDefinitions(after))
+}
+
+func providerVisibleMessage(msg providers.Message) providers.Message {
+	msg.PromptLayer = ""
+	msg.PromptSlot = ""
+	msg.PromptSource = ""
+	if len(msg.SystemParts) > 0 {
+		msg.SystemParts = append([]providers.ContentBlock(nil), msg.SystemParts...)
+		for i := range msg.SystemParts {
+			msg.SystemParts[i].PromptLayer = ""
+			msg.SystemParts[i].PromptSlot = ""
+			msg.SystemParts[i].PromptSource = ""
+		}
+	}
+	return msg
+}
+
+func providerVisibleToolDefinitions(defs []providers.ToolDefinition) []providers.ToolDefinition {
+	cloned := cloneToolDefinitions(defs)
+	for i := range cloned {
+		cloned[i].PromptLayer = ""
+		cloned[i].PromptSlot = ""
+		cloned[i].PromptSource = ""
+	}
+	return cloned
 }
 
 func (hm *HookManager) BeforeTool(
@@ -781,7 +868,7 @@ func cloneLLMResponse(resp *providers.LLMResponse) *providers.LLMResponse {
 
 func cloneStringAnyMap(src map[string]any) map[string]any {
 	if len(src) == 0 {
-		return nil
+		return map[string]any{}
 	}
 
 	cloned := make(map[string]any, len(src))
