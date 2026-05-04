@@ -1501,7 +1501,7 @@ func TestAgentLoop_StopCommand_AbortsActiveTurnAndClearsQueuedSteering(t *testin
 
 	select {
 	case outbound := <-msgBus.OutboundChan():
-		want := "⏹️ Task stopped. \"do work\" was canceled."
+		want := "Task stopped. \"do work\" was canceled."
 		if outbound.Content != want {
 			t.Fatalf("stop reply = %q, want %q", outbound.Content, want)
 		}
