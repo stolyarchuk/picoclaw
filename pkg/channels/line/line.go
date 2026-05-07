@@ -583,10 +583,11 @@ func classifySDKError(resp *http.Response, err error) error {
 
 // sendLoading sends a loading animation indicator to the chat.
 func (c *LINEChannel) sendLoading(ctx context.Context, chatID string) error {
-	resp, _, err := c.client.WithContext(ctx).ShowLoadingAnimationWithHttpInfo(&messaging_api.ShowLoadingAnimationRequest{
+	req := &messaging_api.ShowLoadingAnimationRequest{
 		ChatId:         chatID,
 		LoadingSeconds: 60,
-	})
+	}
+	resp, _, err := c.client.WithContext(ctx).ShowLoadingAnimationWithHttpInfo(req)
 	return classifySDKError(resp, err)
 }
 
