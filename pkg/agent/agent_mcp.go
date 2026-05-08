@@ -250,6 +250,9 @@ func (al *AgentLoop) ensureMCPInitialized(ctx context.Context) error {
 				if !ok {
 					continue
 				}
+				if !agentHasDiscoverableMCPServers(al.cfg, agent.MCPServerAllowlist) {
+					continue
+				}
 
 				if useRegex {
 					agent.Tools.Register(tools.NewRegexSearchTool(agent.Tools, ttl, maxSearchResults))
@@ -332,6 +335,21 @@ func filterMCPConfigServers(
 	}
 
 	return filtered
+}
+
+func agentHasDiscoverableMCPServers(cfg *config.Config, allowed map[string]struct{}) bool {
+	if cfg == nil || !cfg.Tools.MCP.Enabled || !cfg.Tools.MCP.Discovery.Enabled {
+		return false
+	}
+
+	filtered := filterMCPConfigServers(cfg.Tools.MCP, allowed)
+	for _, serverCfg := range filtered.Servers {
+		if serverCfg.Enabled && serverIsDeferred(cfg.Tools.MCP.Discovery.Enabled, serverCfg) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // serverIsDeferred reports whether an MCP server's tools should be registered

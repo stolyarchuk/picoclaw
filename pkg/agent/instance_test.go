@@ -10,6 +10,7 @@ import (
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/media"
 	"github.com/sipeed/picoclaw/pkg/providers"
+	"github.com/sipeed/picoclaw/pkg/tools"
 )
 
 func TestNewAgentInstance_UsesDefaultsTemperatureAndMaxTokens(t *testing.T) {
@@ -714,6 +715,95 @@ model: claude-frontmatter
 	}
 	if agent.Provider == defaultProvider {
 		t.Fatal("expected primary provider to be resolved from model_list instead of using injected default provider")
+	}
+}
+
+func TestNewAgentInstance_SuppressesToolDiscoveryPromptWhenNoMCPServersSelected(t *testing.T) {
+	workspace := setupWorkspace(t, map[string]string{
+		"AGENT.md": `---
+mcpServers: []
+---
+# Agent
+`,
+	})
+	defer cleanupWorkspace(t, workspace)
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: workspace,
+				ModelName: "default-model",
+			},
+		},
+		Tools: config.ToolsConfig{
+			MCP: config.MCPConfig{
+				ToolConfig: config.ToolConfig{Enabled: true},
+				Discovery: config.ToolDiscoveryConfig{
+					Enabled:  true,
+					UseBM25:  true,
+					UseRegex: false,
+				},
+				Servers: map[string]config.MCPServerConfig{
+					"github": {Enabled: true},
+				},
+			},
+		},
+	}
+
+	agent := NewAgentInstance(&config.AgentConfig{
+		ID:        "research",
+		Workspace: workspace,
+	}, &cfg.Agents.Defaults, cfg, &mockProvider{})
+
+	if agent.AllowsMCPServer("github") {
+		t.Fatal("expected empty mcpServers allowlist to deny all servers")
+	}
+	messages := agent.ContextBuilder.BuildMessagesFromPrompt(PromptBuildRequest{CurrentMessage: "hello"})
+	if prompt := messages[0].Content; strings.Contains(prompt, tools.BM25SearchToolName) {
+		t.Fatalf("expected no tool discovery prompt when no MCP servers are selected, got %q", prompt)
+	}
+}
+
+func TestNewAgentInstance_IncludesToolDiscoveryPromptWhenDiscoverableMCPServerSelected(t *testing.T) {
+	workspace := setupWorkspace(t, map[string]string{
+		"AGENT.md": `---
+mcpServers: [github]
+---
+# Agent
+`,
+	})
+	defer cleanupWorkspace(t, workspace)
+
+	cfg := &config.Config{
+		Agents: config.AgentsConfig{
+			Defaults: config.AgentDefaults{
+				Workspace: workspace,
+				ModelName: "default-model",
+			},
+		},
+		Tools: config.ToolsConfig{
+			MCP: config.MCPConfig{
+				ToolConfig: config.ToolConfig{Enabled: true},
+				Discovery: config.ToolDiscoveryConfig{
+					Enabled:  true,
+					UseBM25:  true,
+					UseRegex: false,
+				},
+				Servers: map[string]config.MCPServerConfig{
+					"github": {Enabled: true},
+				},
+			},
+		},
+	}
+
+	agent := NewAgentInstance(&config.AgentConfig{
+		ID:        "research",
+		Workspace: workspace,
+	}, &cfg.Agents.Defaults, cfg, &mockProvider{})
+
+	messages := agent.ContextBuilder.BuildMessagesFromPrompt(PromptBuildRequest{CurrentMessage: "hello"})
+	if prompt := messages[0].Content; !strings.Contains(prompt, tools.BM25SearchToolName) {
+		t.Fatalf("expected tool discovery prompt when a discoverable MCP server is selected, got %q", prompt)
 	}
 }
 

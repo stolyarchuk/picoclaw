@@ -164,7 +164,7 @@ func resolveAgentMCPServerAllowlist(definition AgentContextDefinition) map[strin
 	if frontmatterParseFailed(definition) {
 		return map[string]struct{}{}
 	}
-	if definition.Agent == nil || definition.Agent.Frontmatter.MCPServers == nil {
+	if definition.Agent == nil || !frontmatterDeclaresField(definition, "mcpServers") {
 		return nil
 	}
 
@@ -178,6 +178,14 @@ func resolveAgentMCPServerAllowlist(definition AgentContextDefinition) map[strin
 	}
 
 	return allowlist
+}
+
+func frontmatterDeclaresField(definition AgentContextDefinition, field string) bool {
+	if definition.Agent == nil || definition.Agent.Frontmatter.Fields == nil {
+		return false
+	}
+	_, ok := definition.Agent.Frontmatter.Fields[field]
+	return ok
 }
 
 func frontmatterParseFailed(definition AgentContextDefinition) bool {

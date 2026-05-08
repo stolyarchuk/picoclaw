@@ -204,6 +204,71 @@ func TestFilterMCPConfigServersCaseInsensitivePreservesOriginalKeys(t *testing.T
 	}
 }
 
+func TestAgentHasDiscoverableMCPServers(t *testing.T) {
+	deferredFalse := false
+	cfg := &config.Config{
+		Tools: config.ToolsConfig{
+			MCP: config.MCPConfig{
+				ToolConfig: config.ToolConfig{Enabled: true},
+				Discovery: config.ToolDiscoveryConfig{
+					Enabled:  true,
+					UseBM25:  true,
+					UseRegex: false,
+				},
+				Servers: map[string]config.MCPServerConfig{
+					"github":     {Enabled: true},
+					"filesystem": {Enabled: true, Deferred: &deferredFalse},
+				},
+			},
+		},
+	}
+
+	tests := []struct {
+		name    string
+		allowed map[string]struct{}
+		want    bool
+	}{
+		{
+			name: "nil allowlist includes discoverable enabled server",
+			want: true,
+		},
+		{
+			name:    "empty allowlist denies all servers",
+			allowed: map[string]struct{}{},
+			want:    false,
+		},
+		{
+			name: "selected server discoverable",
+			allowed: map[string]struct{}{
+				"github": {},
+			},
+			want: true,
+		},
+		{
+			name: "selected server opted out of discovery",
+			allowed: map[string]struct{}{
+				"filesystem": {},
+			},
+			want: false,
+		},
+		{
+			name: "unknown allowlist server matches nothing",
+			allowed: map[string]struct{}{
+				"slack": {},
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := agentHasDiscoverableMCPServers(cfg, tt.allowed); got != tt.want {
+				t.Fatalf("agentHasDiscoverableMCPServers() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestEnsureMCPInitialized_LoadFailureSetsInitErr(t *testing.T) {
 	al, cfg, _, _, cleanup := newTestAgentLoop(t)
 	defer cleanup()
