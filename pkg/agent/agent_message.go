@@ -65,40 +65,6 @@ func (al *AgentLoop) ProcessDirectWithChannel(
 	return al.processMessage(ctx, msg)
 }
 
-func (al *AgentLoop) processScheduledMessage(ctx context.Context, msg bus.InboundMessage) (string, error) {
-	msg = al.prepareInboundMessageForAgent(ctx, msg)
-	route, agent, routeErr := al.resolveMessageRoute(msg)
-	if routeErr != nil {
-		return "", routeErr
-	}
-	allocation := al.allocateRouteSession(route, msg)
-	sessionKey := resolveScopeKey(allocation.SessionKey, msg.SessionKey)
-
-	if tool, ok := agent.Tools.Get("message"); ok {
-		if resetter, ok := tool.(interface{ ResetSentInRound(sessionKey string) }); ok {
-			resetter.ResetSentInRound(sessionKey)
-		}
-	}
-
-	return al.runAgentLoop(ctx, agent, processOptions{
-		Dispatch: DispatchRequest{
-			SessionKey:     sessionKey,
-			SessionAliases: buildSessionAliases(sessionKey, append(allocation.SessionAliases, msg.SessionKey)...),
-			InboundContext: cloneInboundContext(&msg.Context),
-			RouteResult:    cloneResolvedRoute(&route),
-			SessionScope:   session.CloneScope(&allocation.Scope),
-			UserMessage:    msg.Content,
-			Media:          append([]string(nil), msg.Media...),
-		},
-		SenderID:             msg.SenderID,
-		SenderDisplayName:    msg.Sender.DisplayName,
-		DefaultResponse:      defaultResponse,
-		EnableSummary:        false,
-		SendResponse:         false,
-		SuppressToolFeedback: true,
-		NoHistory:            true,
-	})
-}
 func (al *AgentLoop) ProcessHeartbeat(
 	ctx context.Context,
 	content, channel, chatID string,
