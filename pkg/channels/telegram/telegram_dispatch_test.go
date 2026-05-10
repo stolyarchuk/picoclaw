@@ -121,6 +121,92 @@ func TestHandleBusinessMessage_BusinessOwnerIgnoresMessage(t *testing.T) {
 	}
 }
 
+func TestHandleBusinessMessage_DisabledBusinessCommandsIgnoresCommand(t *testing.T) {
+	messageBus := bus.NewMessageBus()
+	ch := &TelegramChannel{
+		BaseChannel: channels.NewBaseChannel("telegram", nil, messageBus, nil),
+		chatIDs:     make(map[string]int64),
+		ctx:         context.Background(),
+		tgCfg: &config.TelegramSettings{
+			BusinessMode:           true,
+			BusinessCommandsEnable: false,
+		},
+	}
+
+	msg := &telego.Message{
+		Text:                 "/new",
+		MessageID:            20,
+		BusinessConnectionID: "biz-conn-1",
+		Entities: []telego.MessageEntity{{
+			Type:   telego.EntityTypeBotCommand,
+			Offset: 0,
+			Length: len("/new"),
+		}},
+		Chat: telego.Chat{
+			ID:   777,
+			Type: "private",
+		},
+		From: &telego.User{
+			ID:        42,
+			FirstName: "Alice",
+		},
+	}
+
+	if err := ch.handleBusinessMessage(context.Background(), msg); err != nil {
+		t.Fatalf("handleBusinessMessage error: %v", err)
+	}
+
+	select {
+	case inbound := <-messageBus.InboundChan():
+		t.Fatalf("expected disabled business commands to ignore message, got %#v", inbound)
+	default:
+	}
+}
+
+func TestHandleBusinessMessage_EnabledBusinessCommandsForwardsCommand(t *testing.T) {
+	messageBus := bus.NewMessageBus()
+	ch := &TelegramChannel{
+		BaseChannel: channels.NewBaseChannel("telegram", nil, messageBus, nil),
+		chatIDs:     make(map[string]int64),
+		ctx:         context.Background(),
+		tgCfg: &config.TelegramSettings{
+			BusinessMode:           true,
+			BusinessCommandsEnable: true,
+		},
+	}
+
+	msg := &telego.Message{
+		Text:                 "/new",
+		MessageID:            21,
+		BusinessConnectionID: "biz-conn-1",
+		Entities: []telego.MessageEntity{{
+			Type:   telego.EntityTypeBotCommand,
+			Offset: 0,
+			Length: len("/new"),
+		}},
+		Chat: telego.Chat{
+			ID:   777,
+			Type: "private",
+		},
+		From: &telego.User{
+			ID:        42,
+			FirstName: "Alice",
+		},
+	}
+
+	if err := ch.handleBusinessMessage(context.Background(), msg); err != nil {
+		t.Fatalf("handleBusinessMessage error: %v", err)
+	}
+
+	inbound, ok := <-messageBus.InboundChan()
+	if !ok {
+		t.Fatal("expected inbound message to be forwarded")
+	}
+	if inbound.Content != "/new" {
+		t.Fatalf("content=%q", inbound.Content)
+	}
+}
+
 func TestTelegramAllowedUpdates_BusinessMode(t *testing.T) {
 	disabled := strings.Join(telegramAllowedUpdates(false), ",")
 	if strings.Contains(disabled, telego.BusinessMessageUpdates) {

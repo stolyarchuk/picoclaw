@@ -107,6 +107,18 @@ export function TelegramForm({
               placeholder="123456789"
             />
           </Field>
+
+          <div>
+            <SwitchCardField
+              label={t("channels.field.businessCommandsEnable")}
+              hint={t("channels.form.desc.businessCommandsEnable")}
+              checked={asBool(config.business_commands_enable)}
+              onCheckedChange={(checked) =>
+                onChange("business_commands_enable", checked)
+              }
+              ariaLabel={t("channels.field.businessCommandsEnable")}
+            />
+          </div>
         </CardContent>
       </Card>
 
