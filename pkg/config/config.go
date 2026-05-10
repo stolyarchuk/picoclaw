@@ -364,6 +364,7 @@ type TelegramSettings struct {
 	Proxy         string          `json:"proxy"               yaml:"-"               env:"PICOCLAW_CHANNELS_TELEGRAM_PROXY"`
 	Streaming     StreamingConfig `json:"streaming,omitempty" yaml:"-"`
 	BusinessMode  bool            `json:"business_mode"       yaml:"-"               env:"PICOCLAW_CHANNELS_TELEGRAM_BUSINESS_MODE"`
+	BusinessOwner string          `json:"business_owner"      yaml:"-"               env:"PICOCLAW_CHANNELS_TELEGRAM_BUSINESS_OWNER"`
 	UseMarkdownV2 bool            `json:"use_markdown_v2"     yaml:"-"               env:"PICOCLAW_CHANNELS_TELEGRAM_USE_MARKDOWN_V2"`
 }
 

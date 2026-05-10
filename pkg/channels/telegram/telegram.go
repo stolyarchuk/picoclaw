@@ -787,8 +787,26 @@ func (c *TelegramChannel) handleBusinessMessage(ctx context.Context, message *te
 	if businessConnectionID == "" {
 		return fmt.Errorf("business message missing business_connection_id")
 	}
+	if c.isBusinessOwnerMessage(message) {
+		logger.DebugCF("telegram", "Business message ignored from configured owner", map[string]any{
+			"business_connection_id": businessConnectionID,
+			"user_id":                fmt.Sprintf("%d", message.From.ID),
+		})
+		return nil
+	}
 	c.markBusinessMessageRead(ctx, businessConnectionID, message.Chat.ID, message.MessageID)
 	return c.handleTelegramMessage(ctx, message, businessConnectionID)
+}
+
+func (c *TelegramChannel) isBusinessOwnerMessage(message *telego.Message) bool {
+	if c == nil || c.tgCfg == nil || message == nil || message.From == nil {
+		return false
+	}
+	ownerID := strings.TrimSpace(c.tgCfg.BusinessOwner)
+	if ownerID == "" {
+		return false
+	}
+	return ownerID == fmt.Sprintf("%d", message.From.ID)
 }
 
 func (c *TelegramChannel) markBusinessMessageRead(
