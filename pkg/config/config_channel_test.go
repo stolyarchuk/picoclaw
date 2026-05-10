@@ -15,13 +15,14 @@ import (
 // ─── Test extend structs (simplified, settings + secure in one struct) ───
 
 type testTelegramConfig struct {
-	BaseURL       string          `json:"base_url"            yaml:"-"`
-	Proxy         string          `json:"proxy"               yaml:"-"`
-	BusinessMode  bool            `json:"business_mode"       yaml:"-"`
-	BusinessOwner string          `json:"business_owner"      yaml:"-"`
-	UseMarkdownV2 bool            `json:"use_markdown_v2"     yaml:"-"`
-	Streaming     StreamingConfig `json:"streaming,omitempty" yaml:"-"`
-	Token         SecureString    `json:"token,omitzero"      yaml:"token,omitempty"`
+	BaseURL                string          `json:"base_url"            yaml:"-"`
+	Proxy                  string          `json:"proxy"               yaml:"-"`
+	BusinessMode           bool            `json:"business_mode"       yaml:"-"`
+	BusinessOwner          string          `json:"business_owner"      yaml:"-"`
+	BusinessCommandsEnable bool            `json:"business_commands_enable" yaml:"-"`
+	UseMarkdownV2          bool            `json:"use_markdown_v2"     yaml:"-"`
+	Streaming              StreamingConfig `json:"streaming,omitempty" yaml:"-"`
+	Token                  SecureString    `json:"token,omitzero"      yaml:"token,omitempty"`
 }
 
 type testDiscordConfig struct {
@@ -111,6 +112,7 @@ func TestChannel_JSON_Unmarshal(t *testing.T) {
 			"base_url": "https://custom-api.example.com",
 			"business_mode": true,
 			"business_owner": "42",
+			"business_commands_enable": true,
 			"use_markdown_v2": true,
 			"streaming": {"enabled": true, "throttle_seconds": 2},
 			"token": "[NOT_HERE]"
@@ -132,6 +134,7 @@ func TestChannel_JSON_Unmarshal(t *testing.T) {
 	assert.Equal(t, "https://custom-api.example.com", cfg.BaseURL)
 	assert.True(t, cfg.BusinessMode)
 	assert.Equal(t, "42", cfg.BusinessOwner)
+	assert.True(t, cfg.BusinessCommandsEnable)
 	assert.True(t, cfg.UseMarkdownV2)
 	assert.True(t, cfg.Streaming.Enabled)
 	assert.Equal(t, 2, cfg.Streaming.ThrottleSeconds)

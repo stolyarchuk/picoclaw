@@ -794,8 +794,34 @@ func (c *TelegramChannel) handleBusinessMessage(ctx context.Context, message *te
 		})
 		return nil
 	}
+	if c.isDisabledBusinessCommand(message) {
+		logger.DebugCF("telegram", "Business bot command ignored because business_commands_enable is false", map[string]any{
+			"business_connection_id": businessConnectionID,
+			"user_id":                fmt.Sprintf("%d", message.From.ID),
+		})
+		return nil
+	}
 	c.markBusinessMessageRead(ctx, businessConnectionID, message.Chat.ID, message.MessageID)
 	return c.handleTelegramMessage(ctx, message, businessConnectionID)
+}
+
+func (c *TelegramChannel) isDisabledBusinessCommand(message *telego.Message) bool {
+	if c == nil || c.tgCfg == nil || c.tgCfg.BusinessCommandsEnable || message == nil {
+		return false
+	}
+	return isTelegramBotCommandMessage(message)
+}
+
+func isTelegramBotCommandMessage(message *telego.Message) bool {
+	if message == nil {
+		return false
+	}
+	for _, entity := range message.Entities {
+		if entity.Type == telego.EntityTypeBotCommand {
+			return true
+		}
+	}
+	return strings.HasPrefix(strings.TrimSpace(message.Text), "/")
 }
 
 func (c *TelegramChannel) isBusinessOwnerMessage(message *telego.Message) bool {
