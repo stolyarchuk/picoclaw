@@ -787,7 +787,31 @@ func (c *TelegramChannel) handleBusinessMessage(ctx context.Context, message *te
 	if businessConnectionID == "" {
 		return fmt.Errorf("business message missing business_connection_id")
 	}
+	c.markBusinessMessageRead(ctx, businessConnectionID, message.Chat.ID, message.MessageID)
 	return c.handleTelegramMessage(ctx, message, businessConnectionID)
+}
+
+func (c *TelegramChannel) markBusinessMessageRead(
+	ctx context.Context,
+	businessConnectionID string,
+	chatID int64,
+	messageID int,
+) {
+	if c == nil || c.bot == nil || strings.TrimSpace(businessConnectionID) == "" || chatID == 0 || messageID == 0 {
+		return
+	}
+	if err := c.bot.ReadBusinessMessage(ctx, &telego.ReadBusinessMessageParams{
+		BusinessConnectionID: businessConnectionID,
+		ChatID:               chatID,
+		MessageID:            messageID,
+	}); err != nil {
+		logger.DebugCF("telegram", "Failed to mark business message as read", map[string]any{
+			"business_connection_id": businessConnectionID,
+			"chat_id":                chatID,
+			"message_id":             messageID,
+			"error":                  err.Error(),
+		})
+	}
 }
 
 func (c *TelegramChannel) handleBusinessConnection(_ context.Context, connection telego.BusinessConnection) error {
