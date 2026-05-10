@@ -84,6 +84,43 @@ func TestHandleBusinessMessage_DisabledBusinessModeIgnoresMessage(t *testing.T) 
 	}
 }
 
+func TestHandleBusinessMessage_BusinessOwnerIgnoresMessage(t *testing.T) {
+	messageBus := bus.NewMessageBus()
+	ch := &TelegramChannel{
+		BaseChannel: channels.NewBaseChannel("telegram", nil, messageBus, nil),
+		chatIDs:     make(map[string]int64),
+		ctx:         context.Background(),
+		tgCfg: &config.TelegramSettings{
+			BusinessMode:  true,
+			BusinessOwner: "42",
+		},
+	}
+
+	msg := &telego.Message{
+		Text:                 "owner should be ignored",
+		MessageID:            19,
+		BusinessConnectionID: "biz-conn-1",
+		Chat: telego.Chat{
+			ID:   777,
+			Type: "private",
+		},
+		From: &telego.User{
+			ID:        42,
+			FirstName: "Owner",
+		},
+	}
+
+	if err := ch.handleBusinessMessage(context.Background(), msg); err != nil {
+		t.Fatalf("handleBusinessMessage error: %v", err)
+	}
+
+	select {
+	case inbound := <-messageBus.InboundChan():
+		t.Fatalf("expected owner business message to be ignored, got %#v", inbound)
+	default:
+	}
+}
+
 func TestTelegramAllowedUpdates_BusinessMode(t *testing.T) {
 	disabled := strings.Join(telegramAllowedUpdates(false), ",")
 	if strings.Contains(disabled, telego.BusinessMessageUpdates) {
