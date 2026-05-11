@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -208,17 +209,140 @@ func TestHandleBusinessMessage_EnabledBusinessCommandsForwardsCommand(t *testing
 }
 
 func TestTelegramAllowedUpdates_BusinessMode(t *testing.T) {
-	disabled := strings.Join(telegramAllowedUpdates(false), ",")
+	disabled := strings.Join(telegramAllowedUpdates(false, false), ",")
 	if strings.Contains(disabled, telego.BusinessMessageUpdates) {
 		t.Fatalf("disabled updates include business messages: %s", disabled)
 	}
 
-	enabled := strings.Join(telegramAllowedUpdates(true), ",")
+	enabled := strings.Join(telegramAllowedUpdates(true, false), ",")
 	if !strings.Contains(enabled, telego.BusinessMessageUpdates) {
 		t.Fatalf("enabled updates do not include business messages: %s", enabled)
 	}
 	if !strings.Contains(enabled, telego.DeletedBusinessMessagesUpdates) {
 		t.Fatalf("enabled updates do not include deleted business messages: %s", enabled)
+	}
+}
+
+func TestTelegramAllowedUpdates_GuestMode(t *testing.T) {
+	disabled := strings.Join(telegramAllowedUpdates(false, false), ",")
+	if strings.Contains(disabled, telegramGuestMessageUpdates) {
+		t.Fatalf("disabled updates include guest messages: %s", disabled)
+	}
+
+	enabled := strings.Join(telegramAllowedUpdates(false, true), ",")
+	if !strings.Contains(enabled, telegramGuestMessageUpdates) {
+		t.Fatalf("enabled updates do not include guest messages: %s", enabled)
+	}
+}
+
+func TestHandleGuestMessage_DisabledGuestModeIgnoresMessage(t *testing.T) {
+	messageBus := bus.NewMessageBus()
+	ch := &TelegramChannel{
+		BaseChannel: channels.NewBaseChannel("telegram", nil, messageBus, nil),
+		chatIDs:     make(map[string]int64),
+		ctx:         context.Background(),
+		tgCfg:       &config.TelegramSettings{GuestMode: false},
+	}
+
+	msg := &telegramGuestMessage{
+		Message: telego.Message{
+			Text:      "ignored guest message",
+			MessageID: 18,
+			Chat: telego.Chat{
+				ID:   777,
+				Type: "private",
+			},
+			From: &telego.User{
+				ID:        42,
+				FirstName: "Alice",
+			},
+		},
+		GuestQueryID: "guest-query-1",
+	}
+
+	if err := ch.handleGuestMessage(context.Background(), msg); err != nil {
+		t.Fatalf("handleGuestMessage error: %v", err)
+	}
+
+	select {
+	case inbound := <-messageBus.InboundChan():
+		t.Fatalf("expected disabled guest mode to ignore message, got %#v", inbound)
+	default:
+	}
+}
+
+func TestHandleGuestMessage_ForwardsWithGuestContext(t *testing.T) {
+	messageBus := bus.NewMessageBus()
+	ch := &TelegramChannel{
+		BaseChannel: channels.NewBaseChannel("telegram", nil, messageBus, nil),
+		chatIDs:     make(map[string]int64),
+		ctx:         context.Background(),
+		tgCfg:       &config.TelegramSettings{GuestMode: true},
+	}
+
+	msg := &telegramGuestMessage{
+		Message: telego.Message{
+			Text:      "hello from guest",
+			MessageID: 17,
+			Chat: telego.Chat{
+				ID:   777,
+				Type: "private",
+			},
+			From: &telego.User{
+				ID:        42,
+				FirstName: "Alice",
+			},
+		},
+		GuestQueryID: "guest-query-1",
+	}
+
+	if err := ch.handleGuestMessage(context.Background(), msg); err != nil {
+		t.Fatalf("handleGuestMessage error: %v", err)
+	}
+
+	inbound, ok := <-messageBus.InboundChan()
+	if !ok {
+		t.Fatal("expected inbound message to be forwarded")
+	}
+	if inbound.ChatID != "guest:guest-query-1:777" {
+		t.Fatalf("chat_id=%q", inbound.ChatID)
+	}
+	if inbound.Context.Account != "guest-query-1" {
+		t.Fatalf("account=%q", inbound.Context.Account)
+	}
+	if inbound.Context.Raw["guest_query_id"] != "guest-query-1" {
+		t.Fatalf("guest_query_id=%q", inbound.Context.Raw["guest_query_id"])
+	}
+	if inbound.Content != "hello from guest" {
+		t.Fatalf("content=%q", inbound.Content)
+	}
+}
+
+func TestTelegramRawUpdateDecodesGuestQueryID(t *testing.T) {
+	payload := []byte(`{
+		"update_id": 1001,
+		"guest_message": {
+			"message_id": 17,
+			"guest_query_id": "guest-query-1",
+			"date": 1760000000,
+			"chat": {"id": 777, "type": "private"},
+			"from": {"id": 42, "is_bot": false, "first_name": "Alice"},
+			"text": "hello from guest"
+		}
+	}`)
+
+	var update telegramRawUpdate
+	if err := json.Unmarshal(payload, &update); err != nil {
+		t.Fatalf("unmarshal raw update: %v", err)
+	}
+	if update.GuestMessage == nil {
+		t.Fatal("guest message was not decoded")
+	}
+	if update.GuestMessage.GuestQueryID != "guest-query-1" {
+		t.Fatalf("guest_query_id=%q", update.GuestMessage.GuestQueryID)
+	}
+	if update.GuestMessage.Text != "hello from guest" {
+		t.Fatalf("text=%q", update.GuestMessage.Text)
 	}
 }
 
