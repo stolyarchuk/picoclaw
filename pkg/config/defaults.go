@@ -498,6 +498,7 @@ func defaultChannels() ChannelsConfig {
 			"settings": map[string]any{
 				"streaming":                map[string]any{"enabled": true, "throttle_seconds": 3, "min_growth_chars": 200},
 				"business_mode":            false,
+				"guest_mode":               false,
 				"business_owner":           "",
 				"business_commands_enable": false,
 				"use_markdown_v2":          false,

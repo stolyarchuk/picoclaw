@@ -97,6 +97,16 @@ export function TelegramForm({
             />
           </div>
 
+          <div>
+            <SwitchCardField
+              label={t("channels.field.guestMode")}
+              hint={t("channels.form.desc.guestMode")}
+              checked={asBool(config.guest_mode)}
+              onCheckedChange={(checked) => onChange("guest_mode", checked)}
+              ariaLabel={t("channels.field.guestMode")}
+            />
+          </div>
+
           <Field
             label={t("channels.field.businessOwner")}
             hint={t("channels.form.desc.businessOwner")}

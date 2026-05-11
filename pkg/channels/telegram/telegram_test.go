@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -388,6 +390,59 @@ func TestSend_BusinessMessageIncludesBusinessConnectionID(t *testing.T) {
 	assert.Equal(t, int64(777), params.ChatID)
 	assert.Equal(t, "biz-conn-1", params.BusinessConnectionID)
 	assert.Equal(t, "hello business", params.Text)
+}
+
+func TestSend_GuestMessageUsesAnswerGuestQuery(t *testing.T) {
+	var requestPath string
+	var params struct {
+		GuestQueryID string `json:"guest_query_id"`
+		Result       struct {
+			Type                string `json:"type"`
+			ID                  string `json:"id"`
+			Title               string `json:"title"`
+			InputMessageContent struct {
+				MessageText string `json:"message_text"`
+				ParseMode   string `json:"parse_mode"`
+			} `json:"input_message_content"`
+		} `json:"result"`
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestPath = r.URL.Path
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&params))
+		_, _ = w.Write([]byte(`{"ok":true,"result":{"message_id":55}}`))
+	}))
+	defer server.Close()
+
+	ch := newTestChannel(t, &stubCaller{
+		callFn: func(ctx context.Context, url string, data *ta.RequestData) (*ta.Response, error) {
+			t.Fatalf("guest reply must not use telego caller: %s", url)
+			return nil, nil
+		},
+	})
+	ch.tgCfg.BaseURL = server.URL
+
+	ids, err := ch.Send(context.Background(), bus.OutboundMessage{
+		ChatID:  "guest:guest-query-1:777",
+		Content: "hello guest",
+		Context: bus.InboundContext{
+			Channel: "telegram",
+			ChatID:  "guest:guest-query-1:777",
+			Account: "guest-query-1",
+			Raw: map[string]string{
+				"guest_query_id": "guest-query-1",
+			},
+		},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"55"}, ids)
+	assert.Equal(t, "/bot"+testToken+"/answerGuestQuery", requestPath)
+	assert.Equal(t, "guest-query-1", params.GuestQueryID)
+	assert.Equal(t, "article", params.Result.Type)
+	assert.Equal(t, "picoclaw-reply", params.Result.ID)
+	assert.Equal(t, "PicoClaw", params.Result.Title)
+	assert.Equal(t, "hello guest", params.Result.InputMessageContent.MessageText)
+	assert.Equal(t, telego.ModeHTML, params.Result.InputMessageContent.ParseMode)
 }
 
 func TestSend_NonToolFeedbackDeletesTrackedProgressMessage(t *testing.T) {
@@ -806,7 +861,7 @@ func TestParseTelegramChatID_InvalidThreadID(t *testing.T) {
 }
 
 func TestParseTelegramOutboundTarget_BusinessConnectionIDWithColon(t *testing.T) {
-	formatted := formatTelegramDeliveryChatID(777, "biz:conn:1", 42)
+	formatted := formatTelegramDeliveryChatID(777, "biz:conn:1", "", 42)
 
 	target, err := parseTelegramOutboundTarget(formatted)
 
