@@ -101,9 +101,11 @@ type TelegramChannel struct {
 }
 
 type telegramMediaGroup struct {
-	messages   []*telego.Message
-	timer      *time.Timer
-	generation uint64
+	messages             []*telego.Message
+	businessConnectionID string
+	guestQueryID         string
+	timer                *time.Timer
+	generation           uint64
 }
 
 type telegramMessageParts struct {
@@ -1173,18 +1175,23 @@ func (c *TelegramChannel) handleTelegramMessage(
 	guestQueryID string,
 ) error {
 	if message != nil && strings.TrimSpace(message.MediaGroupID) != "" {
-		return c.bufferMediaGroupMessage(ctx, message)
+		return c.bufferMediaGroupMessage(ctx, message, businessConnectionID, guestQueryID)
 	}
-	return c.handleMessages(ctx, []*telego.Message{message})
+	return c.handleMessages(ctx, []*telego.Message{message}, businessConnectionID, guestQueryID)
 }
 
-func (c *TelegramChannel) bufferMediaGroupMessage(ctx context.Context, message *telego.Message) error {
+func (c *TelegramChannel) bufferMediaGroupMessage(
+	ctx context.Context,
+	message *telego.Message,
+	businessConnectionID string,
+	guestQueryID string,
+) error {
 	if message == nil {
 		return fmt.Errorf("message is nil")
 	}
 	groupID := strings.TrimSpace(message.MediaGroupID)
 	if groupID == "" {
-		return c.handleMessages(ctx, []*telego.Message{message})
+		return c.handleMessages(ctx, []*telego.Message{message}, businessConnectionID, guestQueryID)
 	}
 
 	msgCopy := *message
@@ -1200,6 +1207,8 @@ func (c *TelegramChannel) bufferMediaGroupMessage(ctx context.Context, message *
 		group = &telegramMediaGroup{}
 		c.mediaGroups[key] = group
 	}
+	group.businessConnectionID = businessConnectionID
+	group.guestQueryID = guestQueryID
 	group.messages = append(group.messages, &msgCopy)
 	group.generation++
 	generation := group.generation
@@ -1255,6 +1264,8 @@ func (c *TelegramChannel) flushMediaGroup(ctx context.Context, key string, gener
 		group.timer.Stop()
 	}
 	messages := append([]*telego.Message(nil), group.messages...)
+	businessConnectionID := group.businessConnectionID
+	guestQueryID := group.guestQueryID
 	c.mediaGroupMu.Unlock()
 
 	if len(messages) == 0 {
@@ -1275,7 +1286,7 @@ func (c *TelegramChannel) flushMediaGroup(ctx context.Context, key string, gener
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if err := c.handleMessages(ctx, messages); err != nil {
+	if err := c.handleMessages(ctx, messages, businessConnectionID, guestQueryID); err != nil {
 		logger.ErrorCF("telegram", "Failed to handle media group", map[string]any{
 			"key":   key,
 			"error": err.Error(),
@@ -1283,7 +1294,12 @@ func (c *TelegramChannel) flushMediaGroup(ctx context.Context, key string, gener
 	}
 }
 
-func (c *TelegramChannel) handleMessages(ctx context.Context, messages []*telego.Message) error {
+func (c *TelegramChannel) handleMessages(
+	ctx context.Context,
+	messages []*telego.Message,
+	businessConnectionID string,
+	guestQueryID string,
+) error {
 	if len(messages) == 0 {
 		return nil
 	}
