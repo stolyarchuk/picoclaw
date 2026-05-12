@@ -51,6 +51,7 @@ Telegram auto-registers PicoClaw's top-level bot commands at startup, including 
 
 Skill-related commands:
 
+- `/list models` lists enabled models configured in `model_list` and marks the active model.
 - `/list skills` lists the installed skills visible to the current agent.
 - `/list mcp` lists configured MCP servers and whether they are deferred/connected.
 - `/show mcp <server>` lists the active tools for a connected MCP server.
@@ -61,6 +62,7 @@ Skill-related commands:
 Examples:
 
 ```text
+/list models
 /list skills
 /list mcp
 /show mcp github
