@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mymmrac/telego"
+
 	"github.com/sipeed/picoclaw/pkg/commands"
 )
 
@@ -88,5 +90,32 @@ func TestStartCommandRegistration_StopsAfterCancel(t *testing.T) {
 	time.Sleep(30 * time.Millisecond)
 	if attempts.Load() != stable {
 		t.Fatalf("expected retries to quiesce after cancel, got %d -> %d", stable, attempts.Load())
+	}
+}
+
+func TestCommandRegistrationParams_CoverVisibleMenuScopes(t *testing.T) {
+	params := commandRegistrationParams(commands.BuiltinDefinitions())
+	if len(params) != 3 {
+		t.Fatalf("len(params)=%d, want default/private/group scopes", len(params))
+	}
+
+	if params[0].Scope != nil {
+		t.Fatalf("default scope = %#v, want nil default scope", params[0].Scope)
+	}
+	if _, ok := params[1].Scope.(*telego.BotCommandScopeAllPrivateChats); !ok {
+		t.Fatalf("private scope = %#v, want all private chats", params[1].Scope)
+	}
+	if _, ok := params[2].Scope.(*telego.BotCommandScopeAllGroupChats); !ok {
+		t.Fatalf("group scope = %#v, want all group chats", params[2].Scope)
+	}
+
+	commandsByName := make(map[string]struct{})
+	for _, cmd := range params[0].Commands {
+		commandsByName[cmd.Command] = struct{}{}
+	}
+	for _, name := range []string{"start", "help", "show", "list", "use", "stop"} {
+		if _, ok := commandsByName[name]; !ok {
+			t.Fatalf("registered commands missing %q: %#v", name, params[0].Commands)
+		}
 	}
 }

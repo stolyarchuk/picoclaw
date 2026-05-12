@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"github.com/sipeed/picoclaw/pkg/config"
+	"github.com/sipeed/picoclaw/pkg/providers"
 )
 
 func listCommand() Definition {
@@ -15,17 +18,10 @@ func listCommand() Definition {
 				Name:        "models",
 				Description: "Configured models",
 				Handler: func(_ context.Context, req Request, rt *Runtime) error {
-					if rt == nil || rt.GetModelInfo == nil {
+					if rt == nil {
 						return req.Reply(unavailableMsg)
 					}
-					name, provider := rt.GetModelInfo()
-					if provider == "" {
-						provider = "configured default"
-					}
-					return req.Reply(fmt.Sprintf(
-						"Configured Model: %s\nProvider: %s\n\nTo change models, update config.json",
-						name, provider,
-					))
+					return req.Reply(formatConfiguredModels(rt))
 				},
 			},
 			{
@@ -71,4 +67,74 @@ func listCommand() Definition {
 			},
 		},
 	}
+}
+
+func formatConfiguredModels(rt *Runtime) string {
+	if rt == nil || rt.Config == nil || len(rt.Config.ModelList) == 0 {
+		return "No models configured in model_list"
+	}
+
+	currentModel := rt.Config.Agents.Defaults.GetModelName()
+	if rt.GetModelInfo != nil {
+		if name, _ := rt.GetModelInfo(); strings.TrimSpace(name) != "" {
+			currentModel = name
+		}
+	}
+
+	lines := []string{"Available Models:"}
+	enabledCount := 0
+	for _, model := range rt.Config.ModelList {
+		if !isListableModel(model) {
+			continue
+		}
+		enabledCount++
+
+		marker := "-"
+		if model.ModelName == currentModel {
+			marker = ">"
+		}
+
+		provider := strings.TrimSpace(model.Provider)
+		if provider == "" {
+			provider = modelProviderName(model.Model)
+		}
+		if provider == "" {
+			provider = "configured default"
+		}
+
+		lines = append(lines, fmt.Sprintf(
+			"%s %s (%s, Provider: %s)",
+			marker,
+			model.ModelName,
+			model.Model,
+			provider,
+		))
+	}
+	if enabledCount == 0 {
+		return "No enabled models configured in model_list"
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+func isListableModel(model *config.ModelConfig) bool {
+	if model == nil {
+		return false
+	}
+	if model.Enabled {
+		return true
+	}
+	if len(model.APIKeys.Values()) > 0 {
+		return true
+	}
+	protocol, _ := providers.ExtractProtocol(model)
+	return providers.IsEmptyAPIKeyAllowedForProtocol(protocol)
+}
+
+func modelProviderName(model string) string {
+	provider, _, ok := strings.Cut(strings.TrimSpace(model), "/")
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(provider)
 }

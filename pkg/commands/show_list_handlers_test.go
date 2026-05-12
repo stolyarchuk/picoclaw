@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/sipeed/picoclaw/pkg/config"
 )
 
 func TestShowListHandlers_ChannelPolicy(t *testing.T) {
@@ -100,5 +102,112 @@ func TestShowListHandlers_ListHandledOnAllChannels(t *testing.T) {
 	}
 	if !strings.Contains(reply, "shell") {
 		t.Fatalf("whatsapp /list skills reply=%q, expected installed skills content", reply)
+	}
+}
+
+func TestListModels_ShowsConfiguredEnabledModels(t *testing.T) {
+	rt := &Runtime{
+		Config: &config.Config{
+			Agents: config.AgentsConfig{
+				Defaults: config.AgentDefaults{
+					ModelName: "deepseek",
+				},
+			},
+			ModelList: []*config.ModelConfig{
+				{
+					ModelName: "local",
+					Provider:  "openai",
+					Model:     "openai/local-model",
+					Enabled:   true,
+				},
+				{
+					ModelName: "deepseek",
+					Provider:  "openrouter",
+					Model:     "openrouter/deepseek/deepseek-v3.2",
+					Enabled:   true,
+				},
+				{
+					ModelName: "disabled",
+					Provider:  "openai",
+					Model:     "openai/disabled-model",
+					Enabled:   false,
+				},
+			},
+		},
+		GetModelInfo: func() (string, string) {
+			return "deepseek", "openrouter"
+		},
+	}
+	ex := NewExecutor(NewRegistry(BuiltinDefinitions()), rt)
+
+	var reply string
+	res := ex.Execute(context.Background(), Request{
+		Channel: "telegram",
+		Text:    "/list models",
+		Reply: func(text string) error {
+			reply = text
+			return nil
+		},
+	})
+	if res.Outcome != OutcomeHandled {
+		t.Fatalf("/list models outcome=%v, want=%v", res.Outcome, OutcomeHandled)
+	}
+	if !strings.Contains(reply, "Available Models:") {
+		t.Fatalf("/list models reply=%q, want header", reply)
+	}
+	if !strings.Contains(reply, "- local (openai/local-model, Provider: openai)") {
+		t.Fatalf("/list models reply=%q, want local model", reply)
+	}
+	if !strings.Contains(reply, "> deepseek (openrouter/deepseek/deepseek-v3.2, Provider: openrouter)") {
+		t.Fatalf("/list models reply=%q, want active model marker", reply)
+	}
+	if strings.Contains(reply, "disabled") {
+		t.Fatalf("/list models reply=%q, should not include disabled model", reply)
+	}
+}
+
+func TestListModels_ShowsImplicitlyEnabledConfiguredModels(t *testing.T) {
+	rt := &Runtime{
+		Config: &config.Config{
+			Agents: config.AgentsConfig{
+				Defaults: config.AgentDefaults{
+					ModelName: "gpt-4",
+				},
+			},
+			ModelList: []*config.ModelConfig{
+				{
+					ModelName: "gpt-4",
+					Provider:  "openai",
+					Model:     "openai/gpt-4",
+					APIKeys:   config.SimpleSecureStrings("test-key"),
+				},
+				{
+					ModelName: "local-model",
+					Provider:  "vllm",
+					Model:     "vllm/custom-model",
+					APIBase:   "http://localhost:8000/v1",
+				},
+			},
+		},
+	}
+	ex := NewExecutor(NewRegistry(BuiltinDefinitions()), rt)
+
+	var reply string
+	res := ex.Execute(context.Background(), Request{
+		Channel: "telegram",
+		Text:    "/list models",
+		Reply: func(text string) error {
+			reply = text
+			return nil
+		},
+	})
+	if res.Outcome != OutcomeHandled {
+		t.Fatalf("/list models outcome=%v, want=%v", res.Outcome, OutcomeHandled)
+	}
+	if !strings.Contains(reply, "> gpt-4 (openai/gpt-4, Provider: openai)") {
+		t.Fatalf("/list models reply=%q, want API-key model despite omitted enabled", reply)
+	}
+	if !strings.Contains(reply, "- local-model (vllm/custom-model, Provider: vllm)") {
+		t.Fatalf("/list models reply=%q, want local model despite omitted enabled", reply)
 	}
 }

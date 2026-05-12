@@ -31,6 +31,28 @@ func commandRegistrationDelay(attempt int) time.Duration {
 
 // RegisterCommands registers bot commands on Telegram platform.
 func (c *TelegramChannel) RegisterCommands(ctx context.Context, defs []commands.Definition) error {
+	params := commandRegistrationParams(defs)
+	for _, param := range params {
+		current, err := c.bot.GetMyCommands(ctx, &telego.GetMyCommandsParams{Scope: param.Scope})
+		if err != nil {
+			// If we can't read current commands, fall through to set them.
+			logger.WarnCF("telegram", "Failed to get current commands, will set unconditionally",
+				map[string]any{"error": err.Error()})
+		} else if slices.Equal(current, param.Commands) {
+			logger.DebugCF("telegram", "Bot commands are up to date", map[string]any{
+				"scope": commandScopeName(param.Scope),
+			})
+			continue
+		}
+
+		if err := c.bot.SetMyCommands(ctx, param); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func commandRegistrationParams(defs []commands.Definition) []*telego.SetMyCommandsParams {
 	botCommands := make([]telego.BotCommand, 0, len(defs))
 	for _, def := range defs {
 		if def.Name == "" || def.Description == "" {
@@ -42,19 +64,28 @@ func (c *TelegramChannel) RegisterCommands(ctx context.Context, defs []commands.
 		})
 	}
 
-	current, err := c.bot.GetMyCommands(ctx, &telego.GetMyCommandsParams{})
-	if err != nil {
-		// If we can't read current commands, fall through to set them.
-		logger.WarnCF("telegram", "Failed to get current commands, will set unconditionally",
-			map[string]any{"error": err.Error()})
-	} else if slices.Equal(current, botCommands) {
-		logger.DebugCF("telegram", "Bot commands are up to date", nil)
-		return nil
+	return []*telego.SetMyCommandsParams{
+		{Commands: botCommands},
+		{
+			Commands: botCommands,
+			Scope: &telego.BotCommandScopeAllPrivateChats{
+				Type: telego.ScopeTypeAllPrivateChats,
+			},
+		},
+		{
+			Commands: botCommands,
+			Scope: &telego.BotCommandScopeAllGroupChats{
+				Type: telego.ScopeTypeAllGroupChats,
+			},
+		},
 	}
+}
 
-	return c.bot.SetMyCommands(ctx, &telego.SetMyCommandsParams{
-		Commands: botCommands,
-	})
+func commandScopeName(scope telego.BotCommandScope) string {
+	if scope == nil {
+		return "default"
+	}
+	return scope.ScopeType()
 }
 
 func (c *TelegramChannel) startCommandRegistration(ctx context.Context, defs []commands.Definition) {
