@@ -16,6 +16,7 @@ The Telegram channel uses long polling via the Telegram Bot API for bot-based co
       "settings": {
         "proxy": "",
         "use_markdown_v2": false,
+        "media_group_delay_ms": 500,
         "business_mode": false,
         "guest_mode": false,
         "business_owner": "123456789",
@@ -36,6 +37,7 @@ The Telegram channel uses long polling via the Telegram Bot API for bot-based co
 | settings.business_owner  | string | No       | Telegram user ID of the Business account owner to ignore                 |
 | settings.business_commands_enable | bool | No | Allow bot commands in Telegram Business chats                            |
 | settings.guest_mode      | bool   | No       | Enable Telegram Guest Mode update handling and replies                   |
+| media_group_delay_ms | int | No       | Idle delay before processing Telegram media groups/albums. Defaults to 500 ms |
 
 ## Setup
 
