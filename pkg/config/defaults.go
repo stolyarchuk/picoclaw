@@ -341,6 +341,11 @@ func DefaultConfig() *Config {
 					Enabled:    false,
 					MaxResults: 5,
 				},
+				Gemini: GeminiSearchConfig{
+					Enabled:    false,
+					Model:      "gemini-2.5-flash",
+					MaxResults: 5,
+				},
 				Perplexity: PerplexityConfig{
 					Enabled:    false,
 					MaxResults: 5,
@@ -437,6 +442,9 @@ func DefaultConfig() *Config {
 				Enabled: true,
 			},
 			ListDir: ToolConfig{
+				Enabled: true,
+			},
+			LoadImage: ToolConfig{
 				Enabled: true,
 			},
 			Message: ToolConfig{
@@ -562,6 +570,7 @@ func defaultChannels() ChannelsConfig {
 				"read_timeout":    60,
 				"write_timeout":   10,
 				"max_connections": 100,
+				"streaming":       map[string]any{"enabled": true},
 			},
 		},
 		"irc": map[string]any{

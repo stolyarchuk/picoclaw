@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/sipeed/picoclaw/pkg/bus"
+	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/logger"
 	"github.com/sipeed/picoclaw/pkg/providers"
 	"github.com/sipeed/picoclaw/pkg/session"
@@ -83,6 +84,7 @@ const (
 
 type turnResult struct {
 	finalContent string
+	modelName    string
 	status       TurnEndStatus
 	followUps    []bus.InboundMessage
 }
@@ -124,18 +126,23 @@ type turnExecution struct {
 	iteration int
 
 	// Per-iteration state set by Pipeline.PreLLM
-	activeCandidates []providers.FallbackCandidate
-	activeModel      string
-	activeProvider   providers.LLMProvider
-	usedLight        bool
+	activeCandidates  []providers.FallbackCandidate
+	activeModel       string
+	activeModelConfig *config.ModelConfig
+	activeProvider    providers.LLMProvider
+	usedLight         bool
 
 	// LLM call per-iteration state
 	response            *providers.LLMResponse
 	normalizedToolCalls []providers.ToolCall
 	allResponsesHandled bool
+	streamingPublisher  *streamingChunkPublisher
+	streamingFallback   bool
+	suppressReasoning   bool
 	callMessages        []providers.Message
 	providerToolDefs    []providers.ToolDefinition
 	llmModel            string
+	llmModelName        string
 	llmOpts             map[string]any
 	gracefulTerminal    bool
 	useNativeSearch     bool
@@ -173,9 +180,10 @@ func newTurnExecution(
 type turnState struct {
 	mu sync.RWMutex
 
-	agent *AgentInstance
-	opts  processOptions
-	scope turnEventScope
+	agent   *AgentInstance
+	opts    processOptions
+	profile config.EffectiveTurnProfile
+	scope   turnEventScope
 
 	turnID            string
 	agentID           string
@@ -247,6 +255,7 @@ func newTurnState(agent *AgentInstance, opts processOptions, scope turnEventScop
 	ts := &turnState{
 		agent:        agent,
 		opts:         opts,
+		profile:      opts.TurnProfile,
 		scope:        scope,
 		turnID:       scope.turnID,
 		agentID:      agent.ID,
