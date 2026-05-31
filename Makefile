@@ -1,4 +1,4 @@
-.PHONY: all build install uninstall clean help test build-all lint-docs
+.PHONY: all build install uninstall clean help test integration-test build-all lint-docs
 
 # Build variables
 BINARY_NAME=picoclaw
@@ -17,12 +17,12 @@ ifeq ($(OS),Windows_NT)
 	VERSION_RAW:=$(strip $(shell git describe --tags --always --dirty 2>NUL))
 	GIT_COMMIT_RAW:=$(strip $(shell git rev-parse --short=8 HEAD 2>NUL))
 	BUILD_TIME_RAW:=$(strip $(shell powershell -NoProfile -Command "Get-Date -Format 'yyyy-MM-ddTHH:mm:ssK'"))
-	GO_VERSION_RAW:=$(strip $(shell go env GOVERSION 2>NUL))
+	GO_VERSION_RAW:=$(strip $(word 1,$(shell go env GOVERSION 2>NUL)))
 else
 	VERSION_RAW:=$(strip $(shell git describe --tags --always --dirty 2>/dev/null))
 	GIT_COMMIT_RAW:=$(strip $(shell git rev-parse --short=8 HEAD 2>/dev/null))
 	BUILD_TIME_RAW:=$(strip $(shell date +%FT%T%z))
-	GO_VERSION_RAW:=$(strip $(shell go env GOVERSION 2>/dev/null))
+	GO_VERSION_RAW:=$(strip $(word 1,$(shell go env GOVERSION 2>/dev/null)))
 endif
 VERSION?=$(if $(VERSION_RAW),$(VERSION_RAW),dev)
 GIT_COMMIT=$(if $(GIT_COMMIT_RAW),$(GIT_COMMIT_RAW),dev)
@@ -378,6 +378,10 @@ vet: generate
 test: generate
 	@$(GO) test $(GOFLAGS) $$($(GO) list $(GOFLAGS) ./... | grep -v github.com/sipeed/picoclaw/web/)
 	@cd web && make test
+
+## integration-test: Run Docker-backed integration test suites
+integration-test:
+	@bash ./scripts/run-integration-tests.sh
 
 ## fmt: Format Go code
 fmt:
